@@ -16,12 +16,13 @@ class ToolkitStore:
         from .store import Problem
 
         if config.general:
-            from .general_catalog import snapshot
-
             try:
-                return snapshot(config.tools), {}
+                self.context_policies.get(config.general.context_policy)
+                self.executors.get(config.general.workspace_policy)
+                self.extensions.selected_skills(config.general.skills)
+                return self.extensions.snapshots(config.tools), {}
             except ValueError:
-                raise Problem(422, "Unknown v3 capability") from None
+                raise Problem(422, "Unknown capability, skill, or runtime policy") from None
         try:
             tools = self.tools.select(config.tools)
         except ValueError:

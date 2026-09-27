@@ -1,1 +1,15 @@
-{"policy_version":3,"workspace_policy":"python-project-v3","image_digest":"sha256:19fb24382af854b892f46852c768c232f9d8e43923e1c90a146baa564ebc2389","context_bytes":24576,"metadata_bytes":4194304,"capability_schema_slots":4}
+{
+  "policy_version": 3,
+  "workspace_policy": "python-project-v3",
+  "image_digest": "sha256:19fb24382af854b892f46852c768c232f9d8e43923e1c90a146baa564ebc2389",
+  "context_bytes": 24576,
+  "metadata_bytes": 4194304,
+  "capability_schema_slots": 4,
+  "resource_ceilings": {
+    "model_attempts": 1024,
+    "tool_attempts": 8192,
+    "command_attempts": 512,
+    "total_tokens": 1000000,
+    "active_seconds": 86400
+  }
+}

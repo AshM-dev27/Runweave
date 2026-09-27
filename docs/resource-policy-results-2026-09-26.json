@@ -1,0 +1,57 @@
+{
+  "date": "2026-09-26",
+  "feature": "opt-in shared resource policy",
+  "final_source_unchanged_during_full_suite": true,
+  "source_digest": "e4f7af1093035e93fe1cf184dacb108fb5f214257974d7378c12cab1e553fc6c",
+  "full_suite": {
+    "passed": 323,
+    "skipped_paid": 4,
+    "seconds": 625.34,
+    "command": ".venv/bin/pytest -q --integration --tb=short"
+  },
+  "focused": {
+    "passed": 29,
+    "seconds": 33.59,
+    "new_resource_scenarios": 26
+  },
+  "transport_guard_checks": {
+    "passed": 11
+  },
+  "style": {
+    "ruff_check": true,
+    "ruff_format_check": true,
+    "git_diff_check": true
+  },
+  "paid_model_requests": 0,
+  "model_input_tokens": {
+    "direct": {
+      "legacy": 456,
+      "shared": 456
+    },
+    "workspace": {
+      "legacy": 567,
+      "shared": 567
+    },
+    "delegating_parent": {
+      "legacy": 933,
+      "shared": 868
+    },
+    "child": {
+      "legacy": 601,
+      "shared": 554
+    }
+  },
+  "historical_live_replay": {
+    "attempted_campaign": "harness-review-2026-09-24-v1",
+    "result": "Temporal NOT_FOUND; no new historical replay claimed"
+  },
+  "cleanup": {
+    "orphaned_test_workflows_terminated": 17,
+    "remaining_test_schemas": 0,
+    "test_broker_stopped": true,
+    "production_services_not_restarted": true,
+    "remaining_sandbox_job_containers": 0
+  },
+  "production_rollout": false,
+  "evidence_directory": "var/validation/resources-2026-09-26"
+}

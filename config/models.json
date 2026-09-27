@@ -1,6 +1,53 @@
 [
-  {"provider":"fake","model":"deterministic","adapter":"fake","upstream_model":"deterministic","endpoint":null,"auth":"none","credential_env":null,"tool_calling":true,"max_output_tokens":4096,"total_tokens_limit":16000},
-  {"provider":"openai","model":"gpt-4.1-mini","adapter":"openai_responses","upstream_model":"gpt-4.1-mini","endpoint":"https://api.openai.com/v1","auth":"env","credential_env":"OPENAI_API_KEY","tool_calling":true,"max_output_tokens":4096,"total_tokens_limit":16000},
-  {"provider":"openai","model":"gpt-5.6-luna","adapter":"openai_responses","upstream_model":"gpt-5.6-luna","reasoning_effort":"none","endpoint":"https://api.openai.com/v1","auth":"env","credential_env":"OPENAI_API_KEY","tool_calling":true,"max_output_tokens":4096,"total_tokens_limit":16000},
-  {"provider":"anthropic","model":"claude-haiku-4-5","adapter":"anthropic","upstream_model":"claude-haiku-4-5","endpoint":"https://api.anthropic.com","auth":"env","credential_env":"ANTHROPIC_API_KEY","tool_calling":true,"max_output_tokens":4096,"total_tokens_limit":16000}
+  {
+    "provider": "fake",
+    "model": "deterministic",
+    "adapter": "fake",
+    "upstream_model": "deterministic",
+    "endpoint": null,
+    "auth": "none",
+    "credential_env": null,
+    "tool_calling": true,
+    "max_output_tokens": 4096,
+    "total_tokens_limit": 16000
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "adapter": "openai_responses",
+    "upstream_model": "gpt-4.1-mini",
+    "endpoint": "https://api.openai.com/v1",
+    "auth": "env",
+    "credential_env": "OPENAI_API_KEY",
+    "tool_calling": true,
+    "max_output_tokens": 4096,
+    "total_tokens_limit": 16000,
+    "token_counter": "o200k-v1"
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-5.6-luna",
+    "adapter": "openai_responses",
+    "upstream_model": "gpt-5.6-luna",
+    "reasoning_effort": "none",
+    "endpoint": "https://api.openai.com/v1",
+    "auth": "env",
+    "credential_env": "OPENAI_API_KEY",
+    "tool_calling": true,
+    "max_output_tokens": 4096,
+    "total_tokens_limit": 16000,
+    "token_counter": "o200k-v1"
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5",
+    "adapter": "anthropic",
+    "upstream_model": "claude-haiku-4-5",
+    "endpoint": "https://api.anthropic.com",
+    "auth": "env",
+    "credential_env": "ANTHROPIC_API_KEY",
+    "tool_calling": true,
+    "max_output_tokens": 4096,
+    "total_tokens_limit": 16000
+  }
 ]

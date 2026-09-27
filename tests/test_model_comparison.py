@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from agent_runtime.model_adapter import request_context
+from agent_runtime.resources import RequestNotDispatched
 from scripts import model_comparison_budget as guard
 
 
@@ -90,8 +91,9 @@ async def test_model_root_wire_binding_and_failure_latches(tmp_path, outcome):
                 with pytest.raises(RuntimeError):
                     await client.post(guard.MANIFEST["endpoint"], json={**body, **mutation})
             request_context.set({**ctx, "root_id": "wrong"})
-            with pytest.raises(RuntimeError, match="Unadmitted"):
+            with pytest.raises(RequestNotDispatched) as refused:
                 await client.post(guard.MANIFEST["endpoint"], json=body)
+            assert refused.value.reason == "evaluation_limit"
             request_context.set(ctx)
             assert not sent
             if outcome in {"unknown", "body_unknown"}:

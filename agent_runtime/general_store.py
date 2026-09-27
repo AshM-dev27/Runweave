@@ -8,7 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import select
 
 from .db import GateRow, OutboxRow, RunRow, ToolkitRunRow
-from .general_catalog import descriptor, snapshot
+from .general_catalog import descriptor
 from .general_contracts import CompletionAssessment, Criterion, TaskGoal, TaskState
 from .general_db import (
     GeneralOperationRow,
@@ -19,15 +19,16 @@ from .general_db import (
     ProjectWorkspaceRow,
 )
 from .project_store import ProjectStore, covered, digest, fail, path
+from .resource_store import ResourceStore
 
 
-class GeneralStore(ProjectStore):
+class GeneralStore(ResourceStore, ProjectStore):
     async def general(self, run_id):
         async with self.database.sessions() as db:
             row = await db.get(GeneralRunRow, run_id)
             return None if row is None else {"root_id": row.root_id, "parent_id": row.parent_id, **row.data}
 
-    async def general_lock(self, db, run_id, active=True):
+    async def general_lock(self, db, run_id, active=True, admission=True):
         await db.scalar(select(GateRow).where(GateRow.id == 1).with_for_update())
         gr = await db.get(GeneralRunRow, run_id)
         if gr is None:
@@ -40,25 +41,73 @@ class GeneralStore(ProjectStore):
         ):
             fail("run_terminal", 409)
         root_state = await db.get(GeneralRunRow, gr.root_id)
-        if active and self.general_time_remaining(root_state.data) <= 0:
-            fail("run_timeout", 409)
-        if active and gr.parent_id and gr.data.get("active_started") is not None:
-            paused = root_state.data.get("paused_seconds", 0) - gr.data.get("pause_baseline", 0)
-            if root_state.data.get("approval_started") is not None:
-                paused += time.time() - root_state.data["approval_started"]
-            if time.time() - gr.data["active_started"] - paused >= gr.data["local_limits"]["active_seconds"]:
-                fail("run_timeout", 409)
+        from .resources import ResourceBlocked
+
+        paused = root_state.data.get("resource_state", {}).get("pause")
+        if active and admission and paused:
+            raise ResourceBlocked(paused["block"])
+        if active and (admission or not root_state.data["policy"].get("resources")):
+            self.general_check_time(gr, root_state)
         return row, gr, root_state
 
     @staticmethod
-    def general_time_remaining(data):
+    def general_paused_seconds(data):
+        starts = [
+            v
+            for v in [
+                data.get("approval_started"),
+                (data.get("resource_state", {}).get("pause") or {}).get("started"),
+            ]
+            if v is not None
+        ]
+        return data.get("paused_seconds", 0) + (time.time() - min(starts) if starts else 0)
+
+    @classmethod
+    def general_time_remaining(cls, data):
         start = data.get("active_started")
-        if start is None:
-            return data["policy"]["limits"]["active_seconds"]
-        paused = data.get("paused_seconds", 0)
-        if data.get("approval_started") is not None:
-            paused += time.time() - data["approval_started"]
-        return data["policy"]["limits"]["active_seconds"] - (time.time() - start - paused)
+        return data["policy"]["limits"]["active_seconds"] - (
+            time.time() - start - cls.general_paused_seconds(data) if start is not None else 0
+        )
+
+    def general_check_time(self, gr, root):
+        from .resources import ResourceBlocked, policy, shared
+
+        scopes = [(root, self.general_time_remaining(root.data), False)]
+        if gr.parent_id and not shared(root.data) and gr.data.get("active_started") is not None:
+            remaining = gr.data["local_limits"]["active_seconds"] - (
+                time.time()
+                - gr.data["active_started"]
+                - self.general_paused_seconds(root.data)
+                + gr.data.get("pause_baseline", 0)
+            )
+            scopes.append((gr, remaining, True))
+        for owner, remaining, local in scopes:
+            if remaining > 0:
+                continue
+            if not policy(root.data):
+                fail("run_timeout", 409)
+            state = root.data["resource_state"]
+            limit = (
+                owner.data["local_limits"]["active_seconds"]
+                if local
+                else root.data["policy"]["limits"]["active_seconds"]
+            )
+            raise ResourceBlocked(
+                {
+                    "resource": "active_seconds",
+                    "scope": "child" if local else "root",
+                    "owner": owner.run_id,
+                    "run_id": gr.run_id,
+                    "source": "assignment.limits" if local else state["sources"]["active_seconds"],
+                    "limit": limit,
+                    "used": limit - remaining,
+                    "reserved": 0,
+                    "required": 0,
+                    "finalization_reserve": 0,
+                    "policy_version": state["version"],
+                    "reason": "limit",
+                }
+            )
 
     async def general_record(self, db, gr, kind, identity, data):
         old = await db.get(GeneralRecordRow, identity)
@@ -94,16 +143,76 @@ class GeneralStore(ProjectStore):
             if artifact is None:
                 fail("Artifact not found", 404)
             verify(artifact)
-        tools = snapshot(config.tools)
+        aliases = list(config.tools)
+        from .db import SessionRow
+
+        session = await db.get(SessionRow, row.session_id)
+        if (
+            config.general.context_policy == "memory-v1"
+            and session.history
+            and "session_history" not in aliases
+        ):
+            aliases.append("session_history")
+        if config.general.skills and "skill_read" not in aliases:
+            aliases.append("skill_read")
+        tools = self.extensions.snapshots(aliases)
+        skills = self.extensions.selected_skills(config.general.skills)
+        context_policy = self.context_policies.get(config.general.context_policy)
+        executor = self.executors.get(config.general.workspace_policy)
+        review_registration = None
+        if config.general.review:
+            review = config.general.review
+            review_config = config.model_copy(
+                update={
+                    "provider": review.provider or config.provider,
+                    "model": review.model or config.model,
+                    "max_tokens": review.max_tokens,
+                }
+            )
+            registration = self.selection(review_config)
+            from .db import RegistrationRow
+
+            review_registration = registration.identity
+            if await db.get(RegistrationRow, registration.identity) is None:
+                db.add(RegistrationRow(id=registration.identity, config=registration.model_dump()))
+                await db.flush()
         policy = config.general.model_dump()
+        from .resources import LEGACY_CEILINGS, RESOURCE_KEYS
+
+        ceilings = (
+            operator.get("resource_ceilings", LEGACY_CEILINGS) if policy.get("resources") else LEGACY_CEILINGS
+        )
+        if any(type(ceilings.get(k)) is not int or ceilings[k] < 1 for k in RESOURCE_KEYS):
+            fail("invalid_operator_resource_policy", 422)
+        if any(policy["limits"][k] > ceilings[k] for k in RESOURCE_KEYS):
+            fail("resource_limit_exceeds_operator", 422)
+        if not policy.get("resources") and policy.get("delegation"):
+            legacy_child = dict(
+                model_attempts=4, tool_attempts=16, command_attempts=4, total_tokens=16000, active_seconds=240
+            )
+            if any(v > legacy_child[k] for k, v in policy["delegation"]["limits"].items()):
+                fail("resource_limit_exceeds_operator", 422)
+        if (
+            policy.get("resources")
+            and policy["resources"]["allocation"] == "fixed"
+            and policy.get("delegation")
+        ):
+            if any(v > ceilings[k] for k, v in policy["delegation"]["limits"].items()):
+                fail("child_limit_exceeds_operator", 422)
+        if policy.get("resources") and any(
+            v > ceilings[k] for k, v in policy["resources"]["finalization"].items()
+        ):
+            fail("finalization_reserve_exceeds_operator", 422)
         reg = self.selection(config)
         if policy["limits"]["total_tokens"] > reg.total_tokens_limit:
             if "total_tokens" in config.general.limits.model_fields_set:
                 fail("Token limit exceeds registration")
             policy["limits"]["total_tokens"] = reg.total_tokens_limit
-        if (any(a.startswith("workspace_") for a in config.tools) or config.general.delegation) and policy[
-            "limits"
-        ]["total_tokens"] < config.max_tokens + 2560:
+        if (
+            not policy.get("resources")
+            and (any(a.startswith("workspace_") for a in config.tools) or config.general.delegation)
+            and policy["limits"]["total_tokens"] < config.max_tokens + 2560
+        ):
             fail("insufficient_reporting_reserve", 422)
         if body.task:
             if any(
@@ -129,7 +238,31 @@ class GeneralStore(ProjectStore):
             parent_id=None,
             data={
                 "policy": policy,
+                **(
+                    {
+                        "resource_state": {
+                            "version": 1,
+                            "ceilings": {
+                                **ceilings,
+                                "total_tokens": min(ceilings["total_tokens"], reg.total_tokens_limit),
+                            },
+                            "sources": {
+                                k: "agent.limits"
+                                if k in config.general.limits.model_fields_set
+                                else "default"
+                                for k in RESOURCE_KEYS
+                            },
+                            "pause": None,
+                        }
+                    }
+                    if policy.get("resources")
+                    else {}
+                ),
                 "operator": operator,
+                "context_policy_version": context_policy.version,
+                "executor_version": executor.version,
+                "review_registration_id": review_registration,
+                "skills": skills,
                 "tools": tools,
                 "goal": goal.model_dump(),
                 "task_state": state.model_dump(),
@@ -323,7 +456,7 @@ class GeneralStore(ProjectStore):
             {"state_version": task["version"], "checkpoint_id": task["checkpoint_id"]},
         )
 
-    async def general_complete(self, db, row, gr, action):
+    async def completion_gaps(self, db, row, gr, action):
         assessment = CompletionAssessment.model_validate(action["assessment"])
         state, goal = gr.data["task_state"], gr.data["goal"]
         gaps = []
@@ -387,10 +520,34 @@ class GeneralStore(ProjectStore):
         )
         if any(
             o.data.get("status") in {"pending", "outcome_unknown"}
-            and o.id != gr.data.get("current_operation")
+            and o.id != f"{row.id}:action:{gr.data['step']}"
+            and o.data.get("kind") != "completion_review"
             for o in pending
         ):
             gaps.append("unresolved_operations")
+        if not gr.parent_id and gr.data["children"]:
+            child_operations = await db.scalars(
+                select(GeneralOperationRow).where(GeneralOperationRow.run_id.in_(list(gr.data["children"])))
+            )
+            if any(
+                o.data.get("external") and o.data.get("status") in {"pending", "outcome_unknown"}
+                for o in child_operations
+            ):
+                gaps.append("unresolved_child_effects")
+        return assessment, gaps
+
+    async def general_complete(self, db, row, gr, action):
+        assessment, gaps = await self.completion_gaps(db, row, gr, action)
+        state = gr.data["task_state"]
+        if gr.data["policy"].get("review"):
+            from .completion_review import review_input
+
+            request, identity = await review_input(self, db, row, gr, action)
+            record = await db.get(GeneralOperationRow, identity)
+            verdict = record.data.get("result") if record else None
+            assessment.review = verdict or {"verdict": "defer", "reason": "review_required"}
+            if not verdict or verdict["verdict"] != "pass":
+                gaps.append("semantic_review:" + (verdict["verdict"] if verdict else "required"))
         assessment.accepted = not gaps
         assessment.remaining_gaps = sorted(set(gaps))[:24]
         gr.data = {**gr.data, "completion_assessment": assessment.model_dump()}
@@ -403,7 +560,12 @@ class GeneralStore(ProjectStore):
                 from .general_history import completed_turn
 
                 session = await db.get(SessionRow, row.session_id)
-                session.history = completed_turn(session.history, row.input, action["answer"])
+                session.history = completed_turn(
+                    session.history,
+                    row.input,
+                    action["answer"],
+                    bounded=gr.data["policy"].get("context_policy") == "memory-v1",
+                )
             await self.emit(db, row, "terminal", "run.completed")
         else:
             await self.emit(
@@ -426,7 +588,7 @@ class GeneralStore(ProjectStore):
                     fail("Approval decision is immutable", 409)
             else:
                 pending = next((a for a in row.approvals if a["id"] == approval_id), None)
-                if row.status != "awaiting_approval" or pending is None:
+                if row.status not in {"awaiting_approval", "paused_budget"} or pending is None:
                     fail("Approval is not pending", 409)
                 op = await db.get(GeneralOperationRow, approval_id)
                 if op is None or op.run_id != pending["origin_run_id"]:
@@ -434,11 +596,15 @@ class GeneralStore(ProjectStore):
                 elapsed = time.time() - gr.data.get("approval_started", time.time())
                 if gr.data.get("approval_seconds", 0) + elapsed >= row.approval_wait_seconds:
                     fail("approval_timeout", 409)
+                paused = copy.deepcopy(gr.data.get("resource_state", {}).get("pause"))
+                overlap = (
+                    max(0, time.time() - max(paused["started"], gr.data["approval_started"])) if paused else 0
+                )
                 gr.data = {
                     **gr.data,
                     "approval_started": None,
                     "approval_seconds": gr.data.get("approval_seconds", 0) + elapsed,
-                    "paused_seconds": gr.data.get("paused_seconds", 0) + elapsed,
+                    "paused_seconds": gr.data.get("paused_seconds", 0) + elapsed - overlap,
                 }
                 origin = await self.locked(db, op.run_id)
                 origin.decisions = {**origin.decisions, approval_id: approved}
@@ -447,6 +613,10 @@ class GeneralStore(ProjectStore):
                     gr.data = {**gr.data, "denied": sorted(set(gr.data["denied"] + [op.data["scope"]]))}
                 row.status, row.approvals = "running", []
                 origin.status, origin.approvals = "running", []
+                if paused:
+                    paused["prior_status"] = "running"
+                    gr.data = {**gr.data, "resource_state": {**gr.data["resource_state"], "pause": paused}}
+                    row.status = "paused_budget"
                 await self.emit(
                     db,
                     row,
@@ -479,35 +649,71 @@ class GeneralStore(ProjectStore):
                     db.add(OutboxRow(id="cancel:" + rid, run_id=rid, kind="cancel"))
         return await self.get(root.run_id)
 
-    async def general_cleanup(self, run_id):
+    async def general_cleanup(self, run_id, *, allow_complete=True):
         """Acknowledge committed bundles only; pending jobs remain observable."""
-        from .project_sandbox import project_request
+        state = await self.general(run_id)
+        executor = self.executors.get(state["policy"]["workspace_policy"], state.get("executor_version", 1))
+        project_request = executor.request
 
         async with self.database.sessions() as db:
             operations = list(
                 await db.scalars(select(GeneralOperationRow).where(GeneralOperationRow.run_id == run_id))
             )
+        pending = False
         for op in operations:
+            if op.data.get("external") and op.data.get("result") is None:
+                from .extension_runtime import cleanup_extension
+
+                pending |= not await cleanup_extension(self, run_id, op.id)
+                continue
             if not op.data.get("command") or op.data.get("acknowledged"):
                 continue
-            identity = await self.general_command_identity(run_id, op.id)
-            if op.data.get("result") is None:
-                run = await self.get(run_id)
-                if run.status in {"failed", "cancelled"}:
-                    await project_request(identity, cancel=True)
-                else:
-                    return False
-                bundle = await project_request(identity, await self.general_command_payload(run_id, op.id))
-                if bundle.get("error") == "sandbox_pending":
-                    return False
-                await self.general_command_commit(run_id, op.id, bundle, identity)
-            for ordinal in range(1, op.data["command_attempt"] + 1):
-                await project_request(op.id + ":command:" + str(ordinal), acknowledge=True)
-            async with self.database.sessions.begin() as db:
-                current = await db.get(GeneralOperationRow, op.id)
-                current.data = {**current.data, "acknowledged": True}
+            try:
+                identity = await self.general_command_identity(run_id, op.id)
+                if op.data.get("result") is None:
+                    run = await self.get(run_id)
+                    if run.status in {"failed", "cancelled"}:
+                        await project_request(identity, cancel=True)
+                    else:
+                        pending = True
+                        continue
+                    bundle = await project_request(
+                        identity, await self.general_command_payload(run_id, op.id)
+                    )
+                    if bundle.get("error") == "sandbox_pending":
+                        pending = True
+                        continue
+                    await self.general_command_commit(run_id, op.id, bundle, identity)
+                for ordinal in range(1, op.data["command_attempt"] + 1):
+                    await project_request(op.id + ":command:" + str(ordinal), acknowledge=True)
+                async with self.database.sessions.begin() as db:
+                    current = await db.get(GeneralOperationRow, op.id)
+                    current.data = {**current.data, "acknowledged": True}
+            except Exception:
+                pending = True
+        if pending or not allow_complete:
+            return False
         async with self.database.sessions.begin() as db:
             row, gr, _ = await self.general_lock(db, run_id, active=False)
+            # An action may have started while acknowledgments were in flight.
+            current = await db.scalars(
+                select(GeneralOperationRow).where(GeneralOperationRow.run_id == run_id)
+            )
+            if any(
+                (op.data.get("external") and op.data.get("result") is None)
+                or (op.data.get("command") and not op.data.get("acknowledged"))
+                for op in current
+            ):
+                return False
+            for child_id in gr.data["children"]:
+                child = await db.get(GeneralRunRow, child_id)
+                child_run = await db.get(RunRow, child_id)
+                if child.data["cleanup_state"] != "complete" or child_run.status not in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }:
+                    return False
             if gr.data["cleanup_state"] != "complete":
                 gr.data = {**gr.data, "cleanup_state": "complete"}
                 await self.emit(db, row, "cleanup:" + str(gr.data["step"]), "cleanup.completed")

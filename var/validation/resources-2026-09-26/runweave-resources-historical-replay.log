@@ -1,0 +1,53 @@
+Traceback (most recent call last):
+  File "/home/ubuntu/agent_runtime/.venv/lib/python3.13/site-packages/temporalio/service.py", line 475, in _rpc_call
+    resp = await client.call(
+           ^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/home/ubuntu/agent_runtime/.venv/lib/python3.13/site-packages/temporalio/bridge/client.py", line 168, in call
+    resp.ParseFromString(await resp_fut)
+                         ^^^^^^^^^^^^^^
+temporal_sdk_bridge.RPCError: (5, 'workflow not found for ID: run:20f9bb8e-6038-4878-bfad-a3bb90ea84ad', b'\x08\x05\x12Cworkflow not found for ID: run:20f9bb8e-6038-4878-bfad-a3bb90ea84ad\x1aB\n@type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure')
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/replay_resources_histories.py", line 17, in <module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/tmp/replay_resources_histories.py", line 14, in main
+    history=await client.get_workflow_handle('run:'+rid).fetch_history()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/agent_runtime/.venv/lib/python3.13/site-packages/temporalio/client/_workflow.py", line 410, in fetch_history
+    events=[
+           ^
+    ...<7 lines>...
+    ],
+    ^
+  File "/home/ubuntu/agent_runtime/.venv/lib/python3.13/site-packages/temporalio/client/_workflow.py", line 1820, in __anext__
+    await self.fetch_next_page()
+  File "/home/ubuntu/agent_runtime/.venv/lib/python3.13/site-packages/temporalio/client/_workflow.py", line 1784, in fetch_next_page
+    resp = await self._client.workflow_service.get_workflow_execution_history(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<17 lines>...
+    )
+    ^
+  File "/home/ubuntu/agent_runtime/.venv/lib/python3.13/site-packages/temporalio/bridge/services_generated.py", line 740, in get_workflow_execution_history
+    return await self._client._rpc_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/home/ubuntu/agent_runtime/.venv/lib/python3.13/site-packages/temporalio/service.py", line 490, in _rpc_call
+    raise RPCError(message, RPCStatusCode(status), details)
+temporalio.service.RPCError: workflow not found for ID: run:20f9bb8e-6038-4878-bfad-a3bb90ea84ad

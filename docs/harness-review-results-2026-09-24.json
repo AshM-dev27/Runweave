@@ -1,0 +1,187 @@
+{
+  "campaign": "harness-review-2026-09-24-v1",
+  "date": "2026-09-24",
+  "model": "gpt-5.6-luna",
+  "source_unchanged": true,
+  "current_source_matches_live": true,
+  "offline": {
+    "passed": 297,
+    "skipped_paid": 4,
+    "seconds": 567.27,
+    "focused_passed": 56
+  },
+  "physical_requests": 13,
+  "physical_limit": 16,
+  "http_outcomes": [
+    [
+      "http_success",
+      13
+    ]
+  ],
+  "scenarios": [
+    {
+      "scenario": "review_pass",
+      "passed": true,
+      "status": "completed",
+      "verdicts": [
+        "pass"
+      ],
+      "replayed": true,
+      "physical_requests": 1
+    },
+    {
+      "scenario": "review_repair",
+      "passed": true,
+      "status": "failed",
+      "verdicts": [
+        "repair"
+      ],
+      "replayed": true,
+      "physical_requests": 1
+    },
+    {
+      "scenario": "context",
+      "passed": true,
+      "status": "completed",
+      "replayed": true,
+      "physical_requests": 1
+    },
+    {
+      "scenario": "parallel",
+      "passed": false,
+      "status": "failed",
+      "outputs": {
+        "left.txt": "12\n",
+        "right.txt": "20\n"
+      },
+      "children": [
+        {
+          "status": "completed",
+          "error": null
+        },
+        {
+          "status": "completed",
+          "error": null
+        }
+      ],
+      "replayed": true,
+      "physical_requests": 10
+    }
+  ],
+  "parallel_parent_actions": [
+    "assign",
+    "join",
+    "merge_left",
+    "merge_right",
+    "verify_left",
+    "verify_right"
+  ],
+  "parallel_budget": {
+    "execution_version": 3,
+    "accounting_mode": "shared_ledger",
+    "requests": 11,
+    "tool_calls": 6,
+    "reported_tokens": 10405,
+    "reserved_tokens": 3921,
+    "max_requests": 12,
+    "max_tool_calls": 48,
+    "max_total_tokens": 16000,
+    "v3": {
+      "counters": {
+        "model_attempts": 11,
+        "tool_attempts": 6,
+        "command_attempts": 2,
+        "reported_tokens": 10405,
+        "reserved_tokens": 3921,
+        "revisions": 7,
+        "storage_bytes": 6,
+        "reserved_project_bytes": 0
+      },
+      "limits": {
+        "model_attempts": 12,
+        "tool_attempts": 48,
+        "total_tokens": 16000,
+        "active_seconds": 600,
+        "command_attempts": 16,
+        "files": 256,
+        "file_bytes": 262144,
+        "revision_bytes": 4194304,
+        "storage_bytes": 33554432,
+        "revisions": 64
+      }
+    }
+  },
+  "parallel_failure": "Campaign limits refused the next request before dispatch; the runtime retained a conservative reservation and the retry reported model_capacity_pending. Both merges and exact-file checks passed, but final acceptance was not reached.",
+  "sources": {
+    "agent_runtime/config.py": "04194dc0600aaa8c53d900cc6b84ea4a2bcd041b891c4e5d0bb68cbd4ae627d9",
+    "agent_runtime/extensions.py": "8b6e26bd8dc773a1e2962ce0c2046a69ba77b94aba406e0bf8e3a0165ec774e8",
+    "agent_runtime/general_contracts.py": "b77116f6792f9d47fe2965e0c3c8bb3582877d625d2aec133a6ead9e4ab88d3c",
+    "agent_runtime/context.py": "d78bf02d6bdf24ebfaacfc9c8a4a27864ba72bca4ab9c55a545a7a20a41e0859",
+    "agent_runtime/store.py": "9d596a5aabc00195ac7e41c67d8052b811766fc8ab5c572dfa880cbd4c7a5f84",
+    "agent_runtime/project_store.py": "9af907361fc1f56d5d26ef94e3f2c4058eb738cefb5d88f41f1dfd8db0023a22",
+    "agent_runtime/completion_review.py": "7456e152c31c17941cefb7d15794f748bced791bee4a84b8f69cc3b651e28878",
+    "agent_runtime/artifacts.py": "9b5897ab4b30328774399e8a3016fdee649571633fa5b66a12b9a06b68a75b80",
+    "agent_runtime/worker.py": "953d1f7bce550ff1e6cdbb328fb957362a057f18bc5f4003668cb750aa7f21e4",
+    "agent_runtime/telemetry.py": "ee3d956eabb8dfb61034d526bad7bb7d616afefc84f65fc74bbc4f3a65b4ce5a",
+    "agent_runtime/general_completion.py": "334c7211fd1e73c0db1a2987fa90938be8b69fe4760761bbac3f2b793b58a89f",
+    "agent_runtime/general_runtime.py": "9d4c7a40a780d394ae69144a3c07859894b5375c696435bcb035aa06e0999d5b",
+    "agent_runtime/general_semantic.py": "a73e9ac4847605a46654d1085e9aa638823b4d0d1402aefe8015b0f2b323ff22",
+    "agent_runtime/general_store.py": "3fbaefd1ac0ae16dbdbc2e7d99ff991b60765b9b7c2043b16e30946cc2490705",
+    "agent_runtime/general_history.py": "651f0a43bd9357875917808a41ec4d994106b9f6eb4003a5ebd2002a64da6141",
+    "agent_runtime/extension_runtime.py": "62e378f73b90280f73e8654544a756f86746a18f17e7d6e1fa63d4486597b75f",
+    "agent_runtime/runtime.py": "f9a15ff6642963a6e1689286b68e089a97ad06ccb7da1f408e1a9371f2f8219b",
+    "agent_runtime/general_receipts.py": "401d94d93a4308125cee36bdd91316a574c8ac3d847c3de303947bea588ef3ed",
+    "agent_runtime/cli.py": "3219c224a520bd84cbeeb5b6cc370bc4b2eb44b61107d69642a0f677eb994927",
+    "agent_runtime/model_adapter.py": "c2373935a4757cc86709c2e8880bc4e6645e0f728f36463b3757bb320f28b132",
+    "agent_runtime/__init__.py": "2b721f998d1ec294ebe9db88f138f5b072fcaed0713bc5c78baa456e84aee527",
+    "agent_runtime/db.py": "14ba69544150af848cdd18e4d2d57160f192fe44abca30d5abbfbdf23925362b",
+    "agent_runtime/general_catalog.py": "611908d86f4212a39d49da6415ce1d24d1b52307c8d0781536b5cf7b388be05c",
+    "agent_runtime/registry.py": "7adc01df5000c8ad532abb88c6c8c439b85248dff65f238eaebe70dc64b07e64",
+    "agent_runtime/dispatch.py": "d87b3158e79384ac69baa71642bb56cc7ea76ef278266e9f6f0314e888a5a39f",
+    "agent_runtime/toolkit_store.py": "b974672079bf5491631e7d1771de68a23abf59b9dbaacbdf887b23623a233d6f",
+    "agent_runtime/mcp_server.py": "99a0c4a5fd89955c2493d8965f3003c075dbcecbdbe7700cbf5e1c0713506ee6",
+    "agent_runtime/toolkit_workflow.py": "98ec353508d90c0e5293a6f89410bedb5c85fdeb1f80ff45cc37f8b5ce92addc",
+    "agent_runtime/workflow.py": "e431718dc1567c5b112918b13f3b75ad21f0b6bdbfb1bf4a67584dc6487f19f2",
+    "agent_runtime/schemas.py": "b6059d77089a1c716882ada2ecc8f4b569079650b601a28bce46014286a75c20",
+    "agent_runtime/general_actions.py": "7a32bd2b73e9fd61a43f028276ca370fc45906f8ad8ab2ce90dc4cb6c5df9b58",
+    "agent_runtime/general_api.py": "09c34dd0b3a7eb51e95d0506e22a5bcc1f61e7727c91c8f96ba548e8b46d568d",
+    "agent_runtime/tool_registry.py": "251cabf928b4b63794655483422482f8825d833bd7b2fa0e60d7c4f819bc09f8",
+    "agent_runtime/general_db.py": "c84386726bf0d7ac17c2e227887bde6147cbca994865287c8e08f459db2d2002",
+    "agent_runtime/project_sandbox.py": "23a830d6410baa16aa6d9ca0cfc0f490172a86c434855431e5eaf626fa0deeb5",
+    "agent_runtime/client.py": "543c7b74bd1af49b01129d220dbbbf01c036963e6bf6d74a97974c01f1f6d5d5",
+    "agent_runtime/toolkit_runtime.py": "63d8b835fde474debfa6b2d29f6efb29913f60f13890b5067ab6b61080da717b",
+    "agent_runtime/tool_handlers.py": "fe7fe1bb7255d93e7ce82c3086942af227ff6a9497f17f588ef4c4947a83024e",
+    "agent_runtime/activities.py": "94c016fd2c80907d4e5fec81ec89f8b39e3bf679ef1d094d4a0a3d9b1a32939f",
+    "agent_runtime/general_workflow.py": "c8bb2eb57668c54c506b4434e477524f1909fda11acf1175c735127965250b91",
+    "agent_runtime/api.py": "c52f3181cbddb26637f6d24cc3bc469f570060a2c1595eb24f38cf892b85f1ca",
+    "agent_runtime/tool_contracts.py": "cfafd14905069d30a303df9bf0606c38044e8a02900fd5bb4027ee8fc25585de",
+    "agent_runtime/sandbox.py": "32704e90c3263535faffa11c8ca15b5b2304476f9fe823e35dd3102ad425e344",
+    "agent_runtime/executors.py": "5d0ae8195cac1b02f05ad3156c1ceebc098f1db04b958d77cf648929663f683b",
+    "config/extensions.json": "c7928c9527dcac3df0829537bd14a4eae0dbf66a3aa682384fa33252abd6703b",
+    "config/general.json": "444a5b40806877fddbccbd85fa1543ef3f21d1303a194240d56282ca59a6f3ca",
+    "config/models.json": "59e95da86b22feb24ca06203f5a462cad073a1f0260346c49d806ac0f0677c5b",
+    "config/tools.json": "9cd2069de818d0d112728fd251404fb10db1b11332572c64836c5fa26bd31498",
+    "tests/test_harness_review_live.py": "75b59653b986dc35d6c88c2064b432c44fa51d26fea53add43874be75963dfd9",
+    "tests/test_harness_integration.py": "2852509f8d8f68a50269d81a7a808b8e1c1cb7fc82d06449f946f364252a85e4",
+    "tests/test_harness_audit.py": "9af46af7b16aeb60adb35e789fcda8a8ceeb94a9450cc0303f422f5f89e27d8d",
+    "tests/test_harness_races.py": "ede683b45f3897f21d9d2b1cad7df7b522a0ff91774164f37f02b9a79f901e99",
+    "tests/test_harness_review.py": "c44a9377e84358d1330370a8c55e3d3b7e3ef63c9e160c8ee10b7018c37b7537",
+    "tests/test_harness_live.py": "d4c67959faf80ded29d6f7cea7a347f148bf50a22af644fef299c6b8e1046f68",
+    "tests/test_harness_context.py": "02266313f6a654ba6e7c949b12d9895e07ff70b013f9a36b3a9ad5ea0bcdf4da",
+    "tests/test_harness_extensions.py": "22f3ba67136974f01cf57c5da62f1aef864ab56e37fa5e6b70320dbe5b868b90",
+    "tests/test_harness_reliability.py": "cab9b9f4c165c59e23fda009b1f37d454ad47fcc85d76ca999da77289498dee9",
+    "tests/test_general_semantic.py": "d77dd0bdc6d43f6d665fdb7eddbe4084a347d3323d37d004a76cb00788298f9c",
+    "tests/test_general_integration.py": "e8319ed951de4711cf478cccdb9871c080a0a5a962468ff3622b7d876a18d9b3",
+    "tests/conftest.py": "1156281f9660215914738d5b5b9f7a969564a0d51b790870a769bdf206efaa71",
+    "scripts/toolkit_budget.py": "11af400502e8c7f97ec6904fbe3ad2217dd69e1ad385d8ed91ad95f9b2d7f6c0",
+    "scripts/lightweight_budget.py": "85249d08ae2ec0c8c41e25d8ffb8cccfcd97f50d2cf9ce726e13747243a0bdf2",
+    "scripts/completion_models_budget.py": "e86cd266defea45f56a4c346fab75113a963baea5443a9d3a8c967eecb129370",
+    "scripts/harness_budget.py": "a8af5652aae3f7ce0e461214fa7453a811d8a7ab3996c1fa2c2d9450e6b78a09",
+    "scripts/completion_loop_budget.py": "3305fa5f64a16fb404e2e00f4668cd5cb811c16ac1ab9bea3f66d440ca27577b",
+    "scripts/harness_review_budget.py": "85cc70b1a0fdbf9c1165c754864941fa5b92bc2adf5bba3e9daf2a1aca90ec6b",
+    "scripts/model_comparison_budget.py": "16bc419c10ea17b3d72e32828cf568d9ea3d4054c547f513cede53057efe5c0b",
+    "scripts/general_budget.py": "4898eb4119aa68c95605f19c593c555978a49b1183fa1eb6d934cc774eacc94f",
+    "scripts/completion_loop_fixtures.py": "db9ea188cd93ae027fd178f9fa28c8e149e8f228bf9bee67495bb0040109b1f0",
+    "uv.lock": "a08fe3076c0ba21d5694a5d8403233e80ee4f551d1d2a0ba40f641f8e8f03df9"
+  }
+}

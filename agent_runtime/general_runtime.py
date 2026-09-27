@@ -18,6 +18,8 @@ from .general_contracts import Criterion, PlanStep, StepDecision
 from .general_db import GeneralAttemptRow, GeneralOperationRow
 from .model_adapter import build_model, request_context
 from .project_store import digest, fail
+from .resources import ResourceBlocked, check, not_dispatched, reserve_for, settle_model_attempt
+from .resources import policy as resource_policy
 from .runtime import get_store
 
 
@@ -30,9 +32,10 @@ class DecisionEnvelope(BaseModel):
 
 
 class GeneralModel(WrapperModel):
-    def __init__(self, model, run_id, op_id, output):
+    def __init__(self, model, run_id, op_id, output, token_counter="utf8-v1"):
         super().__init__(model)
         self.run_id, self.op_id, self.output = run_id, op_id, output
+        self.token_counter = token_counter
         self.reject_multiple = False
         self.semantic_type = None
 
@@ -70,7 +73,18 @@ class GeneralModel(WrapperModel):
             }
         if context_bytes > 24576:
             fail("context_limit", 409)
-        token_reservation = context_bytes + self.output + 512
+        from .context import reserve_tokens
+
+        token_reservation = reserve_tokens(
+            encoded + json.dumps(definitions, separators=(",", ":")).encode(), self.output, self.token_counter
+        )
+        async with store.database.sessions.begin() as db:
+            op = await db.get(GeneralOperationRow, self.op_id)
+            op.data = {
+                **op.data,
+                "required_reservation": token_reservation,
+                "token_counter": self.token_counter,
+            }
         attempt_id = self.op_id + ":" + str(uuid4())
 
         async def reserve_attempt():
@@ -80,9 +94,19 @@ class GeneralModel(WrapperModel):
                 await store.general_charge_locked(db, gr, root, "model_attempts")
                 data = copy.deepcopy(root.data)
                 budget = data["budget"]
-                if budget["reported_tokens"] + budget["reserved_tokens"] + token_reservation > data["policy"][
-                    "limits"
-                ]["total_tokens"] - (self.output + 2560 if gr.parent_id else 0):
+                if resource_policy(root.data):
+                    check(
+                        root,
+                        gr,
+                        "total_tokens",
+                        token_reservation,
+                        reserve_for(root.data, "total_tokens") if gr.parent_id else 0,
+                    )
+                if not resource_policy(root.data) and budget["reported_tokens"] + budget[
+                    "reserved_tokens"
+                ] + token_reservation > data["policy"]["limits"]["total_tokens"] - (
+                    self.output + 2560 if gr.parent_id else 0
+                ):
                     if (
                         op.data.get("binding")
                         and budget["reserved_tokens"]
@@ -94,7 +118,7 @@ class GeneralModel(WrapperModel):
                     fail("budget_exhausted", 409)
                 if gr.parent_id:
                     local = copy.deepcopy(gr.data)
-                    if (
+                    if not resource_policy(root.data) and (
                         local.get("reported_tokens", 0) + local.get("reserved_tokens", 0) + token_reservation
                         > local["local_limits"]["total_tokens"]
                     ):
@@ -143,27 +167,15 @@ class GeneralModel(WrapperModel):
         )
         try:
             response = await self.wrapped.request(messages, model_settings, model_request_parameters)
+        except BaseException as exc:
+            refused = not_dispatched(exc)
+            await settle_model_attempt(store, self.run_id, attempt_id, refused=refused)
+            if refused is not None:
+                raise refused from None
+            raise
         finally:
             request_context.reset(context)
-        async with store.database.sessions.begin() as db:
-            _, gr, root = await store.general_lock(db, self.run_id, active=False)
-            attempt = await db.get(GeneralAttemptRow, attempt_id)
-            if not attempt.data["settled"]:
-                state = copy.deepcopy(root.data)
-                state["budget"]["reserved_tokens"] -= token_reservation
-                state["budget"]["reported_tokens"] += response.usage.total_tokens
-                root.data = state
-                if gr.parent_id:
-                    gr.data = {
-                        **gr.data,
-                        "reserved_tokens": gr.data.get("reserved_tokens", 0) - token_reservation,
-                        "reported_tokens": gr.data.get("reported_tokens", 0) + response.usage.total_tokens,
-                    }
-                attempt.data = {
-                    **attempt.data,
-                    "settled": True,
-                    "reported_tokens": response.usage.total_tokens,
-                }
+        await settle_model_attempt(store, self.run_id, attempt_id, tokens=response.usage.total_tokens)
 
         # Retain only schema-known field names and types, never arbitrary provider keys.
         known_fields = set()
@@ -324,10 +336,12 @@ async def general_step(run_id: str | dict):
                     "pause_baseline": root.data.get("paused_seconds", 0),
                 }
             report_only = (
-                not gr.parent_id
+                not resource_policy(root.data)
+                and not gr.parent_id
                 and bool(gr.data["tools"])
                 and root.data["budget"]["model_attempts"]
-                >= root.data["policy"]["limits"]["model_attempts"] - 1
+                >= root.data["policy"]["limits"]["model_attempts"]
+                - (2 if root.data["policy"].get("review") else 1)
             )
             state = copy.deepcopy(gr.data)
             prior = (
@@ -370,6 +384,13 @@ async def general_step(run_id: str | dict):
                     id=op_id, run_id=run_id, fingerprint=digest({"step": step}), data={"sequence": step * 2}
                 )
                 db.add(old)
+            if semantic and old.data.get("resource_retry"):
+                refreshed = {
+                    k: v
+                    for k, v in old.data.items()
+                    if k not in {"binding", "semantic_context", "resource_retry"}
+                }
+                old.data = refreshed
             if semantic and not old.data.get("binding"):
                 from .general_semantic import capture
 
@@ -378,16 +399,23 @@ async def general_step(run_id: str | dict):
                 )
                 old.data = {**old.data, "binding": binding}
             binding = old.data.get("binding")
-            old.data = {**old.data, "lease": time.time() + 45, "owner": lease, "status": "pending"}
+            old.data = {**old.data, "lease": time.time() + 60, "owner": lease, "status": "pending"}
             if row.status == "queued":
                 row.status = "running"
                 await store.emit(db, row, "running", "run.running")
             config, prompt, registration_id = row.config, row.input, row.registration_id
             from .db import SessionRow
-            from .general_history import context as history_context
 
             session = await db.get(SessionRow, row.session_id)
-            previous_turns = [] if gr.parent_id else history_context(session.history)
+            context_policy = store.context_policies.get(
+                state["policy"].get("context_policy", "bounded-v3"), state.get("context_policy_version", 1)
+            )
+            history = session.history
+            if not gr.parent_id and context_policy.name == "memory-v1":
+                from .context import session_messages
+
+                history = await session_messages(db, row, prompt)
+            previous_turns = [] if gr.parent_id else context_policy.history(history, prompt)
         verifications = (await store.general_records(run_id, "verification", limit=128))["items"]
         for cid in state["children"]:
             child = await store.general(cid)
@@ -409,17 +437,21 @@ async def general_step(run_id: str | dict):
         elif semantic:
             from .general_semantic import compile_decision, instructions, project_context, wire_type
 
-            context = project_context(binding, prompt, previous_turns, report_only)
+            context = context_policy.compact(
+                project_context(binding, prompt, previous_turns, report_only), 14000
+            )
             async with store.database.sessions.begin() as db:
                 op = await db.get(GeneralOperationRow, op_id)
                 if "semantic_context" not in op.data:
                     op.data = {**op.data, "semantic_context": context}
                 context = op.data["semantic_context"]
             report_only = context["report_only"]
-            encoded = json.dumps(context, separators=(",", ":"))
+            encoded = json.dumps(context, separators=(",", ":"), ensure_ascii=False)
             if len(encoded.encode()) > 16000:
                 fail("context_limit", 409)
-            model = GeneralModel(build_model(registration), run_id, op_id, config["max_tokens"])
+            model = GeneralModel(
+                build_model(registration), run_id, op_id, config["max_tokens"], registration.token_counter
+            )
             model.reject_multiple = binding["version"] >= 2
             model.semantic_type = wire_type(binding)
             model.semantic_version = binding["version"]
@@ -471,10 +503,12 @@ async def general_step(run_id: str | dict):
                 "children": state["children"],
                 "delegation": state["policy"].get("delegation"),
             }
-            encoded = json.dumps(context, separators=(",", ":"))
+            encoded = json.dumps(context, separators=(",", ":"), ensure_ascii=False)
             if len(encoded.encode()) > 16000:
                 fail("context_limit", 409)
-            model = GeneralModel(build_model(registration), run_id, op_id, config["max_tokens"])
+            model = GeneralModel(
+                build_model(registration), run_id, op_id, config["max_tokens"], registration.token_counter
+            )
             agent = Agent(
                 model,
                 output_type=DecisionEnvelope,
@@ -515,7 +549,7 @@ async def general_step(run_id: str | dict):
             )
         encoded_decision = decision.model_dump()
         async with store.database.sessions.begin() as db:
-            row, gr, _ = await store.general_lock(db, run_id)
+            row, gr, _ = await store.general_lock(db, run_id, admission=False)
             op = await db.get(GeneralOperationRow, op_id)
             if op.data["owner"] != lease:
                 fail("model_lease_fenced", 409)
@@ -538,7 +572,13 @@ async def general_step(run_id: str | dict):
             async with store.database.sessions.begin() as db:
                 op = await db.get(GeneralOperationRow, op_id)
                 if op:
-                    op.data = {**op.data, "failure_type": type(exc).__name__, "status": "failed", "lease": 0}
+                    op.data = {
+                        **op.data,
+                        "failure_type": type(exc).__name__,
+                        "status": "failed",
+                        "lease": 0,
+                        **({"resource_retry": True} if isinstance(exc, ResourceBlocked) else {}),
+                    }
         code = getattr(exc, "detail", "model_execution_failed")
         if code in {"multiple_semantic_outputs", "invalid_semantic_output"} and loop_version >= 2:
             async with store.database.sessions.begin() as db:
@@ -551,6 +591,8 @@ async def general_step(run_id: str | dict):
                     )
             return {"step": step, "rejected": True}
 
+        if isinstance(exc, ResourceBlocked):
+            raise ApplicationError(code, exc.snapshot, non_retryable=True) from None
         raise ApplicationError(
             code,
             non_retryable=code
@@ -562,16 +604,45 @@ async def general_step(run_id: str | dict):
 async def general_action(data: dict):
     store = get_store()
     try:
-        return await store.general_operation(data["run_id"], data["step"], data["decision"])
+        if data["decision"]["action"]["kind"] == "complete":
+            from .completion_review import ensure_review
+
+            await ensure_review(store, data["run_id"], data["decision"]["action"])
+        result = await store.general_operation(data["run_id"], data["step"], data["decision"])
+        if result.get("external"):
+            from .extension_runtime import execute_extension
+
+            result = await execute_extension(store, data["run_id"], result["operation_id"])
+            if result.get("reconcile"):
+                fail("extension_reconcile_pending", 409)
+        return result
     except Exception as exc:
         code = getattr(exc, "detail", "action_failed")
+        if isinstance(exc, ResourceBlocked):
+            raise ApplicationError(code, exc.snapshot, non_retryable=True) from None
+        if code == "model_not_dispatched":
+            raise ApplicationError(code, non_retryable=True) from None
+        if code in {"extension_lease_pending", "review_lease_pending", "extension_reconcile_pending"}:
+            raise ApplicationError(code) from None
         # A rejected decision is observable and consumes progress, not a workflow crash.
         async with store.database.sessions.begin() as db:
-            row, gr, _ = await store.general_lock(db, data["run_id"])
+            row, gr, _ = await store.general_lock(db, data["run_id"], admission=False)
             op_id = f"{row.id}:action:{data['step']}"
             old = await db.get(GeneralOperationRow, op_id)
             if old and old.data.get("result"):
                 return old.data["result"]
+            if old and old.data.get("external") and old.data.get("started"):
+                alias = old.data["decision"]["action"]["capability"]
+                if gr.data["tools"][alias]["effect"]["kind"] == "external-write":
+                    # A lost receipt after dispatch is not proof that the write failed.
+                    # In particular, exhausting reconciliation must never clear the intent.
+                    old.data = {**old.data, "status": "outcome_unknown", "lease": 0}
+                    result = {"error": "extension_outcome_unknown", "operation_id": op_id}
+                    from .general_db import GeneralRecordRow
+
+                    if not await db.get(GeneralRecordRow, op_id + ":checkpoint"):
+                        await store.general_checkpoint(db, row, gr, op_id, result)
+                    return result
             result = {"error": code}
             if old is None:
                 old = GeneralOperationRow(
@@ -588,9 +659,10 @@ async def general_action(data: dict):
 
 @activity.defn
 async def general_command(data: dict):
-    from .project_sandbox import project_request
-
     store = get_store()
+    state = await store.general(data["run_id"])
+    executor = store.executors.get(state["policy"]["workspace_policy"], state.get("executor_version", 1))
+    project_request = executor.request
     try:
         identity, payload = await store.general_command_payload(
             data["run_id"], data["operation_id"], with_identity=True
@@ -610,11 +682,14 @@ async def general_command(data: dict):
             row, gr, _ = await store.general_lock(db, data["run_id"], active=False)
             op = await db.get(GeneralOperationRow, data["operation_id"])
             op.data = {**op.data, "acknowledged": True}
-            gr.data = {**gr.data, "cleanup_state": "pending" if gr.data["children"] else "complete"}
-            if gr.data["cleanup_state"] == "complete":
-                await store.emit(db, row, "cleanup:" + str(gr.data["step"]), "cleanup.completed")
+            gr.data = {**gr.data, "cleanup_state": "pending"}
+            has_children = bool(gr.data["children"])
+        if not has_children:
+            await store.general_cleanup(data["run_id"])
         return result
     except Exception as exc:
+        if isinstance(exc, ResourceBlocked):
+            raise ApplicationError(exc.detail, exc.snapshot, non_retryable=True) from None
         raise ApplicationError(getattr(exc, "detail", "sandbox_unavailable")) from None
 
 
@@ -623,6 +698,12 @@ async def general_state(run_id: str):
     run = await get_store().get(run_id)
     state = await get_store().general(run_id)
     root = await get_store().general(state["root_id"])
+    if resource_policy(root) and run.status not in {"completed", "failed", "cancelled"}:
+        try:
+            async with get_store().database.sessions.begin() as db:
+                await get_store().general_lock(db, run_id)
+        except ResourceBlocked as exc:
+            raise ApplicationError(exc.detail, exc.snapshot, non_retryable=True) from None
     return {
         "active_remaining": max(0, get_store().general_time_remaining(root)),
         "status": run.status,
@@ -637,7 +718,13 @@ async def general_stop(data: dict):
     await get_store().general_stop(data["run_id"], data["code"])
 
 
+@activity.defn
+async def general_resource_pause(data: dict):
+    return await get_store().resource_pause(data["run_id"], data["block"])
+
+
 GENERAL_ACTIVITIES = [
+    general_resource_pause,
     general_step,
     general_action,
     general_command,

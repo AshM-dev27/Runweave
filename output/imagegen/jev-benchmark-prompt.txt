@@ -1,0 +1,26 @@
+Use case: productivity-visual.
+Asset type: polished landscape benchmark infographic, 1536x1024 or similar 3:2 landscape, for sharing alongside an interactive results explorer.
+Primary request: Design a precise editorial infographic for the measured Jev benchmark in Runweave. This is a static companion image; do not draw fake sliders or clickable controls. Make the hierarchy exceptionally clear, restrained and sophisticated, with generous margins, crisp typography, a warm light background, dark navy text, and restrained teal and amber accents. Use four aligned metric columns, a small threshold comparison table, and a compact footer. Avoid decorative 3D objects or noisy charts.
+Exact text and factual data:
+Main title: "Jev × Runweave"
+Subtitle: "Live feasibility benchmark"
+Prominent recommendation: "Best first fit: source + requirement review"
+Study line: "80 cases · 3 passes · 240 requests"
+Section label above the four columns: "Agreement with provisional labels"
+Column 1: "Source support" / "94.4%" / "17 / 18 cases"
+Column 2: "Requirement coverage" / "91.7%" / "11 / 12 cases"
+Column 3: "Context relevance" / "90.0%" / "27 / 30 cases"
+Column 4: "Action diagnosis" / "95.0%" / "19 / 20 cases"
+Subtly emphasize the first two columns as the recommended first integration. A high percentage is not an endorsement of action authority.
+Three compact operating metrics: "742 ms median" / "1,563 ms p95" / "US$0.00475 estimated cost"
+Small table title: "Threshold tradeoff · 240 responses"
+Table headers: "Probability" | "Automatic" | "Review" | "False approvals"
+Table rows exactly:
+"0.80" | "201" | "39" | "6"
+"0.90" | "177" | "63" | "1"
+"0.95" | "153" | "87" | "0"
+Mark 0.90 as "Primary" with a small readable annotation. Treat all values as counts, not percentages.
+Small amber callout: "One mistaken action approval at 0.90"
+Footer, clearly readable: "Synthetic, assistant-labeled cases. Repeats are not independent."
+Tiny provenance line: "Pinned model: jev-1.13.0"
+Constraints: Spell every label correctly, render all figures exactly, no claims of production readiness, no invented charts or additional metrics, no fabricated vendor logo, no watermark. Each percentage is agreement with fixed provisional labels, not proven real-world accuracy. The table is exploratory and the graphic should feel like a thoughtful research result, not a sales advertisement.

@@ -158,7 +158,12 @@ class Transport(httpx.AsyncBaseTransport):
             context.get(k) for k in ["scenario", "run_id", "root_id", "operation_id", "attempt_id"]
         ):
             raise RuntimeError("Missing accounted context")
-        identity = self.guard.reserve(self.path, context, body.get("max_output_tokens"))
+        try:
+            identity = self.guard.reserve(self.path, context, body.get("max_output_tokens"))
+        except RuntimeError:
+            from agent_runtime.resources import RequestNotDispatched
+
+            raise RequestNotDispatched("evaluation_limit") from None
         outcome = "transport_failed_or_ambiguous"
         try:
             response = await self.inner.handle_async_request(request)

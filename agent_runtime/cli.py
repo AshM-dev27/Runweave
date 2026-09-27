@@ -23,6 +23,8 @@ def parser():
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("models")
     sub.add_parser("tools")
+    sub.add_parser("catalog")
+    sub.add_parser("skills")
     sub.add_parser("artifacts")
     up = sub.add_parser("upload")
     up.add_argument("path")
@@ -142,6 +144,10 @@ async def run(args):
         cmd = args.command
         if cmd in {"models", "readiness", "tools", "artifacts"}:
             result = await getattr(client, cmd)()
+        elif cmd == "catalog":
+            result = await client.installed_capabilities()
+        elif cmd == "skills":
+            result = await client.skills()
         elif cmd == "workspace-create":
             result = await client.workspace_create(
                 read_directory(args.directory) if args.directory else {}, idempotency_key=args.key

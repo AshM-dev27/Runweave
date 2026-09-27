@@ -84,7 +84,9 @@ class Answer(Contract):
     value: float | None = None
 
 
-Status = Literal["queued", "running", "awaiting_approval", "completed", "failed", "cancelled"]
+Status = Literal[
+    "queued", "running", "awaiting_approval", "paused_budget", "completed", "failed", "cancelled"
+]
 
 
 class Approval(Contract):

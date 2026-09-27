@@ -11,7 +11,8 @@ Build and run agents with tools, persistent sessions, isolated workspaces, human
 - Tool permissions, approval decisions, cancellation, and bounded execution.
 - Uploadable artifacts, downloadable results, and isolated project workspaces.
 - Scoped delegation with shared resource limits and verification of integrated results.
-- Completion checks against stored evidence for the current project revision.
+- Completion checks against stored evidence for the current project revision, with optional semantic review.
+- Bounded, retrievable conversation memory and operator-installed tools, HTTP MCP, and skills.
 
 The current scope supports one authenticated workspace with explicit provider selection. Multi-tenancy, automatic model routing, and arbitrary network or package access from generated code are outside that scope.
 
@@ -65,6 +66,8 @@ Reuse the idempotency key only when retrying the same submission; use a new key 
 
 - [Usage](docs/usage.md): Python/API examples, CLI commands, artifacts, and workspaces.
 - [General runtime configuration](docs/usage.md#general-runtime-configuration): instructions, authorized tools, delegation, and completion checks.
+- [Resource policy](docs/resource-policy.md): shared compute budgets, durable pause/resume, and server-side enforcement without extra model instructions.
+- [Harness foundations](docs/harness-foundations.md): review, context policies, tool/MCP registration, skills, and execution backends.
 - [Operations](docs/operations.md): provider setup, execution limits, recovery, and sandbox security.
 - [Validation index](docs/validation-index.md): recorded checks, evidence, and limitations.
 - [Current project plan](PLAN.md): scope, current state, and next priorities.
@@ -82,10 +85,12 @@ Licensed under the [Apache License 2.0](LICENSE).
 
 ## TODO
 
-Development build; not production-ready, with live acceptance incomplete—see the [latest findings](docs/completion-models-findings.md).
+Development build; not production-ready, with live acceptance incomplete—see the [latest harness review](docs/harness-review-2026-09-24.md) and [earlier cross-model results](docs/completion-models-findings.md).
 
 Outstanding work from [PLAN.md](PLAN.md#next-priorities), plus publication preparation:
 
-- [ ] Reduce repeated actions and clarify pending completion checks.
-- [ ] Improve parallel/subagent completion, compact child context, and investigate reservation headroom within shared limits.
+- [x] Distinguish pending checks, reuse current verification receipts, and add optional semantic review.
+- [x] Add bounded context/retrieval and versioned token reservations within existing shared limits.
+- [x] Add versioned extension interfaces for tools/MCP, skills, context, and execution.
+- [ ] Broaden live acceptance, including reliable parallel/subagent completion.
 - [ ] Complete remaining evaluation and recovery/replay checks, and establish deployment-readiness evidence.

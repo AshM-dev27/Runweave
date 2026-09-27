@@ -34,6 +34,8 @@ class GeneralActions:
                 if old.data.get("result") is not None:
                     return old.data["result"]
                 await self.general_lock(db, run_id)
+                if old.data.get("external"):
+                    return {"external": True, "operation_id": op_id}
                 if old.data.get("command"):
                     return {"command": True, "operation_id": op_id}
                 operation = old
@@ -102,7 +104,9 @@ class GeneralActions:
                     if query in (a + e["description"]).casefold()
                 ][:4]
                 gr.data = {**gr.data, "loaded": loaded}
-                result = {"capabilities": [gr.data["tools"][a] for a in loaded]}
+                from .general_catalog import descriptor
+
+                result = {"capabilities": [descriptor(gr.data["tools"][a]).model_dump() for a in loaded]}
             elif kind == "assign":
                 result = await self.general_assign(db, row, gr, root, op_id, action["assignments"])
                 progress = True
@@ -122,6 +126,19 @@ class GeneralActions:
                     {k: v for k, v in entry.items() if k != "registration_id"}
                 ) != entry.get("registration_id"):
                     fail("capability_snapshot_unavailable", 409)
+                if entry.get("extension"):
+                    self.extensions.handler(entry["extension"])
+                    self.extensions.validate_arguments(entry, args)
+                    # Unknown external effects block new mutations until reconciled.
+                    unknown = await db.scalars(
+                        select(GeneralOperationRow).where(
+                            GeneralOperationRow.run_id.in_([root.run_id, *root.data["children"]])
+                        )
+                    )
+                    if entry["effect"]["kind"] == "external-write" and any(
+                        o.data.get("status") == "outcome_unknown" for o in unknown
+                    ):
+                        fail("unresolved_external_effect", 409)
                 if not operation.data.get("reserved"):
                     await self.general_charge_locked(
                         db, gr, root, "tool_attempts", integration=alias == "workspace_verify"
@@ -172,8 +189,16 @@ class GeneralActions:
                     elif row.decisions[op_id] is False:
                         result = {"error": "effect_denied"}
                     else:
+                        if entry.get("extension"):
+                            operation.data = {**operation.data, "external": True}
+                            gr.data = {**gr.data, "cleanup_state": "pending"}
+                            return {"external": True, "operation_id": op_id}
                         result = await self.general_effect(db, row, op_id, alias, args)
                 else:
+                    if entry.get("extension"):
+                        operation.data = {**operation.data, "external": True}
+                        gr.data = {**gr.data, "cleanup_state": "pending"}
+                        return {"external": True, "operation_id": op_id}
                     result = await self.general_capability(db, row, gr, root, operation, alias, args)
                     if result.get("command"):
                         return {**result, "operation_id": op_id}
@@ -205,6 +230,23 @@ class GeneralActions:
             return result
 
     async def general_charge_locked(self, db, gr, root, kind, integration=False):
+        from .resources import check, policy, reserve_for
+
+        if policy(root.data):
+            reserve = (
+                reserve_for(root.data, kind)
+                if gr.parent_id or (kind != "model_attempts" and not integration)
+                else 0
+            )
+            check(root, gr, kind, reserve=reserve)
+            rs = copy.deepcopy(root.data)
+            gs = rs if root.run_id == gr.run_id else copy.deepcopy(gr.data)
+            rs["budget"][kind] += 1
+            gs.setdefault("local_usage", {})[kind] = gs.get("local_usage", {}).get(kind, 0) + 1
+            root.data = rs
+            if gr.parent_id:
+                gr.data = gs
+            return
         rs = copy.deepcopy(root.data)
         gs = rs if root.run_id == gr.run_id else copy.deepcopy(gr.data)
         limits = rs["policy"]["limits"]
@@ -214,7 +256,7 @@ class GeneralActions:
             a.startswith("workspace_") for a in rs["tools"]
         )
         reserve = (
-            1
+            (2 if rs["policy"].get("review") else 1)
             if kind == "model_attempts"
             else 2
             if project_work and kind in {"tool_attempts", "command_attempts"}
@@ -232,6 +274,49 @@ class GeneralActions:
             gr.data = gs
 
     async def general_capability(self, db, row, gr, root, operation, alias, args):
+        if alias == "skill_read":
+            if set(args) != {"alias"} or args["alias"] not in gr.data.get("skills", {}):
+                fail("skill_not_authorized", 403)
+            skill = gr.data["skills"][args["alias"]]
+            gr.data = {
+                **gr.data,
+                "loaded_skills": sorted(set(gr.data.get("loaded_skills", [])) | {args["alias"]}),
+            }
+            return {"skill": skill, "permissions": "unchanged"}
+        if alias == "session_history":
+            from .context import excerpt, session_messages, terms
+
+            if gr.parent_id:
+                fail("session_history_not_granted", 403)
+            if set(args) - {"message_id", "query", "offset", "length"}:
+                fail("invalid_arguments")
+            offset, length = args.get("offset", 0), args.get("length", 2000)
+            if type(offset) is not int or type(length) is not int or offset < 0 or not 1 <= length <= 4096:
+                fail("invalid_arguments")
+            items = await session_messages(db, row, str(args.get("query", ""))[:512], args.get("message_id"))
+            if args.get("message_id"):
+                item = next((m for m in items if m["id"] == args["message_id"]), None)
+                if item is None:
+                    fail("history_message_not_found", 404)
+                return {
+                    "message": {
+                        **item,
+                        "content": item["content"][offset : offset + length],
+                        "offset": offset,
+                        "truncated": offset + length < len(item["content"]),
+                    },
+                    "untrusted": True,
+                }
+            query = terms(str(args.get("query", ""))[:512])
+            ranked = sorted(
+                enumerate(items),
+                key=lambda pair: (len(terms(pair[1]["content"]) & query), pair[0]),
+                reverse=True,
+            )
+            return {
+                "messages": [excerpt(item, query, min(length, 1000)) for _, item in ranked[:4]],
+                "untrusted": True,
+            }
         if alias == "add":
             if set(args) != {"a", "b"} or not all(isinstance(x, (int, float)) for x in args.values()):
                 fail("invalid_arguments")
@@ -373,7 +458,12 @@ class GeneralActions:
             revision = await self.branch_commit(db, row.id, candidate, expected)
             if revision != expected:
                 await self.general_require_integration(db, gr)
-            return {"revision_id": revision, "changed": revision != expected}
+            result = {"revision_id": revision, "changed": revision != expected}
+            if revision == expected and gr.data["policy"].get("context_policy") == "memory-v1":
+                result["feedback"] = (
+                    "These files already have the requested bytes. Continue remaining work; do not repeat the same write. Complete runs pending checks."
+                )
+            return result
         if alias == "workspace_outputs":
             op = await db.get(GeneralOperationRow, args.get("operation_id", ""))
             if op is None or op.run_id != row.id:
@@ -429,6 +519,20 @@ class GeneralActions:
 
                     spec = CheckSpec.model_validate(args.get("supporting_check")).model_dump()
                     criterion = args.get("criterion_id", "supporting")
+                if (
+                    provenance in {"user", "runtime"}
+                    and gr.data["policy"].get("context_policy") == "memory-v1"
+                ):
+                    from .general_receipts import current_checks
+
+                    receipt = (await current_checks(self, db, gr)).get((criterion, spec["id"]))
+                    if receipt and receipt["outcome"] == "pass":
+                        return {
+                            "verification_ids": [receipt["id"]],
+                            "outcome": "pass",
+                            "reused": True,
+                            "feedback": "This check already passed for the current revision; proceed to remaining work or complete.",
+                        }
                 if spec["kind"] != "command":
                     name = path(spec["path"])
                     content = files.get(name)
@@ -876,7 +980,11 @@ class GeneralActions:
                 path(p, prefix=True)
                 if not covered(p, assignment.read_prefixes) or not covered(p, grant.data["write_prefixes"]):
                     fail("child_grant_denied", 403)
-            if any(v > policy["limits"][k] for k, v in assignment.limits.model_dump().items()):
+            from .resources import shared
+
+            if not shared(root.data) and any(
+                v > policy["limits"][k] for k, v in assignment.limits.model_dump().items()
+            ):
                 fail("child_budget_denied", 403)
             sequential |= any(
                 gr.data["tools"][a]["effect"]["approval"] == "required" for a in assignment.tools
@@ -908,8 +1016,18 @@ class GeneralActions:
             db.add(child)
             await db.flush()
             data = {
-                "policy": {**gr.data["policy"], "delegation": None},
+                "policy": {
+                    **gr.data["policy"],
+                    "delegation": None,
+                    "review": gr.data["policy"].get("review")
+                    if (gr.data["policy"].get("review") or {}).get("scope") == "all"
+                    else None,
+                },
                 "operator": gr.data["operator"],
+                "context_policy_version": gr.data.get("context_policy_version", 1),
+                "executor_version": gr.data.get("executor_version", 1),
+                "review_registration_id": gr.data.get("review_registration_id"),
+                "skills": gr.data.get("skills", {}),
                 "tools": {a: gr.data["tools"][a] for a in assignment.tools},
                 "goal": goal.model_dump(),
                 "task_state": TaskState(unresolved=[c.id for c in goal.criteria]).model_dump(),

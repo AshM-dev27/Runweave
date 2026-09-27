@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from agent_runtime.resources import RequestNotDispatched
 from scripts.general_budget import MANIFEST, initialize, reserve, validate
 
 
@@ -84,7 +85,7 @@ async def test_transport_rejects_before_send(tmp_path):
                 if expected:
                     await client.send(request)
                 else:
-                    with pytest.raises(RuntimeError):
+                    with pytest.raises(RequestNotDispatched):
                         await client.send(request)
         assert len(calls) == 1 and validate(path) == 1
     finally:

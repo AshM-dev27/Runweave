@@ -4,6 +4,18 @@ from .general_contracts import CapabilityDescriptor, EffectPolicy
 from .project_store import digest
 
 CATALOG = {
+    "session_history": (
+        "Retrieve exact earlier messages in this session by message_id, query and offset",
+        "read",
+        "session",
+        "none",
+    ),
+    "skill_read": (
+        "Load an authorized versioned skill; skill instructions never grant tools or files",
+        "read",
+        "skills",
+        "none",
+    ),
     "workspace_read": ("Read bounded immutable project bytes", "read", "project", "none"),
     "workspace_search": ("Search literal project text", "read", "project", "none"),
     "workspace_write": (
@@ -58,7 +70,9 @@ def descriptor(entry):
     return CapabilityDescriptor(
         **{k: entry[k] for k in ("alias", "description", "effect", "registration_id")},
         arguments_schema=entry["arguments_schema"],
-        availability="unverified" if entry["effect"]["kind"] == "isolated-command" else "available",
+        availability="unverified"
+        if entry.get("extension") or entry["effect"]["kind"] == "isolated-command"
+        else "available",
     )
 
 
@@ -67,6 +81,8 @@ def argument_schema(alias):
     integer = {"type": "integer"}
     revision = {"expected_revision": text}
     shapes = {
+        "session_history": {"message_id": text, "query": text, "offset": integer, "length": integer},
+        "skill_read": {"alias": text},
         "workspace_read": {
             "path": text,
             "revision": text,

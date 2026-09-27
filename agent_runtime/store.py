@@ -31,10 +31,27 @@ class Problem(Exception):
 
 
 class Store(GeneralActions, GeneralStore, ToolkitStore):
-    def __init__(self, database, max_active=20, registry=None, approval_wait_seconds=None):
+    def __init__(
+        self,
+        database,
+        max_active=20,
+        registry=None,
+        approval_wait_seconds=None,
+        *,
+        extensions=None,
+        context_policies=None,
+        executors=None,
+    ):
         self.database, self.max_active = database, max_active
         self.registry = registry or load_registry()
         self.tools = ToolRegistry()
+        from .context import ContextPolicies
+        from .executors import ExecutionBackends
+        from .extensions import ExtensionRegistry
+
+        self.extensions = extensions or ExtensionRegistry()
+        self.context_policies = context_policies or ContextPolicies()
+        self.executors = executors or ExecutionBackends()
         self.approval_wait_seconds = (
             settings().approval_wait_seconds if approval_wait_seconds is None else approval_wait_seconds
         )

@@ -51,6 +51,8 @@ Use `agent --config CONFIG.json` for a complete `AgentConfig`, including `instru
 
 Fake v3 uses scripted test actions, not general language understanding. Select an explicitly registered live provider/model for language tasks; submission may incur provider charges. `models` and `tools` list installed options, not proven availability.
 
+Opt into shared allocation and resumable resource limits with `general.resources: {}`. Policy enforcement stays server-side; see [resource policy](resource-policy.md) for configuration, inspection, and authenticated increases.
+
 V3 uses `general.limits` and the selected per-response `max_tokens`. Optional `general.delegation` authorizes dynamic roles with smaller grants; its tools must be a subset of parent tools. V3 rejects legacy `subagents` and `delegate`. Without `general`, toolkit agents declare up to two `subagents` and select `delegate`; `parallel_read` permits approval-free children, while `sequential` supports approval-requiring specialists. Both paths limit depth to one and lifetime children to two.
 
 The general loop can discover authorized capabilities, invoke them, assign/join/merge work, complete or report a blocker. Discovery never grants more permissions. Caller criteria and constraints remain obligations; completion must cite admissible evidence for the current revision. Fresh integrated checks are required after edits/merges. Syntax checks prove syntax only, and generated checks are supporting evidence. Inspect receipts and outputs; model prose can be wrong.
@@ -73,3 +75,7 @@ operation-output RUN_ID OPERATION_ID OUTPUT_NAME NEW_LOCAL_PATH
 For document/CSV/repository toolkits, use `upload PATH --media-type TYPE --key KEY`, then `submit ... --artifact ID` (repeat for each input). Remembered IDs do not grant access: reattach artifacts on continuation. `download ARTIFACT_ID NEW_PATH` verifies length/SHA-256 and refuses overwrites. Repository snapshot tools produce downloadable patches without applying them.
 
 Approve child requests at the root with the returned approval ID. Cancelling a child cancels its root tree; committed effects remain receipts. `cleanup_state` and SSE expose outstanding cleanup. See [operations](operations.md) for sandbox setup and shared resource limits, and [toolkit evidence](toolkit-validation.md) for concrete retained examples.
+
+## Harness policies and extensions
+
+See [harness foundations](harness-foundations.md) for optional completion review, `memory-v1` session context, installed tool/MCP aliases, selected skills, and custom context/execution policies. Discover installed capabilities with `catalog` and skill metadata with `skills`; include only authorized aliases in the agent configuration.

@@ -1,0 +1,105 @@
+{
+  "cutoff_utc": "2026-09-26T05:43:52+00:00",
+  "orphaned_test_workflows_terminated": [
+    {
+      "id": "run:eb5e8a30-abde-433c-99ef-bf3b5a840726",
+      "queue": "test_7fda53615d58487a92f8f4816c684fbc-v3"
+    },
+    {
+      "id": "run:f098bdca-81e3-432f-a657-5f38c5f029d4",
+      "queue": "test_f2c922d124484421aa6726988c568470-v3"
+    },
+    {
+      "id": "run:986a4ab9-7e5f-414f-bb5e-d4d0ae2b2971",
+      "queue": "test_1fc4ec3d4da54007acb564ce5eab916c-v3"
+    },
+    {
+      "id": "run:f4928d91-55b7-4159-9876-fbcbb0b4b88e",
+      "queue": "test_7622ea42c98240969f3aad19487f1208-v3"
+    },
+    {
+      "id": "run:bbfc6afc-55cf-43ab-ad35-03d1eca3a67d",
+      "queue": "test_addcdc5898234455a1ca3394afba547d-v3"
+    },
+    {
+      "id": "run:3b16892e-0e00-4706-99a8-9d7a61e52eae",
+      "queue": "test_ce073666c4074d59a123c06246c69e45-v3"
+    },
+    {
+      "id": "run:be1751e3-1121-44d0-a249-62f63157a7a9",
+      "queue": "test_a1aa9cc21dce4cdb9162c4cc55da61b1-v3"
+    },
+    {
+      "id": "run:e1971e7f-778a-491a-9c9a-215ccded01cb",
+      "queue": "test_c46a70d7e44b41caa65106f3e1a6769a-v3"
+    },
+    {
+      "id": "run:2b69efbf-d2e9-4b46-af3f-5ce9a45d8c82",
+      "queue": "test_952fcd58301747e4be37fc0b1c2b685c-v3"
+    },
+    {
+      "id": "run:784fb491-2a19-4675-b086-b0c3e4ebecae",
+      "queue": "test_3e5e577754544cd1af9f4a4b0e01de8e-v3"
+    },
+    {
+      "id": "run:56a611eb-274a-4618-897c-fefcd276bccd",
+      "queue": "test_a8278c6631624cf2a7a2ddeff9d27c8a-v3"
+    },
+    {
+      "id": "run:f022c9e8-65b1-46b2-b313-a75cff8249fd",
+      "queue": "test_2706f70492c14b6aa3a9ae8e3802d3a7-v3"
+    },
+    {
+      "id": "run:de9e2889-4bdc-4961-8a28-543fab933654",
+      "queue": "test_1f5f3cd94d6a44a49087cdf8b3655047-v3"
+    },
+    {
+      "id": "run:f7cbd16d-6043-42f8-bf58-e31b08a1f1f5",
+      "queue": "test_f71db672c55b4004ba4fe01da7ea753d-v3"
+    },
+    {
+      "id": "run:5f7d908d-fe19-4b8a-9e9f-cf47058d4c26",
+      "queue": "test_295541eee3974c32af781fdfbd700010-v3"
+    },
+    {
+      "id": "run:fa9ca47f-1781-44e8-8f97-6178f195b340",
+      "queue": "test_39b9d4f26a54473e9dc55045b9671d99-v3"
+    },
+    {
+      "id": "run:da057d67-0228-4f3b-ba4d-1e2264ffc04a",
+      "queue": "test_a4782b7fcab24ef58abeeea0f8712141-v3"
+    }
+  ],
+  "preserved_workflows_with_existing_schemas": [],
+  "remaining_test_schemas": [],
+  "test_broker_stopped": true,
+  "production_services_not_restarted": true,
+  "remaining_sandbox_job_containers": 0,
+  "remaining_pytest_processes": 0,
+  "temporary_paths_removed": [
+    "agent_runtime/__pycache__",
+    "tests/__pycache__",
+    "scripts/__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    "/tmp/pytest-of-ubuntu/pytest-current",
+    "/tmp/pytest-of-ubuntu/pytest-187",
+    "/tmp/pytest-of-ubuntu/pytest-188",
+    "/tmp/pytest-of-ubuntu/pytest-189",
+    "/tmp/refine_resources.py",
+    "/tmp/refine_resources2.py",
+    "/tmp/replay_resources_histories.py",
+    "/tmp/cleanup_resources_validation.py",
+    "/tmp/runweave-resources-cleanup.json",
+    "/tmp/runweave-resources-final-full.log",
+    "/tmp/runweave-resources-final-source.json",
+    "/tmp/runweave-resources-transport.log",
+    "/tmp/runweave-resources-preflight.log",
+    "/tmp/runweave-resources-collection.log",
+    "/tmp/runweave-resources-historical-replay.log",
+    "/tmp/runweave-resources-final-focused.log",
+    "/tmp/runweave-resources-full.log",
+    "/tmp/runweave-resources-new.log",
+    "/tmp/runweave-resources-focused.log"
+  ]
+}

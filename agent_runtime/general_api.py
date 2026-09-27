@@ -8,9 +8,11 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from .general_contracts import (
+    CapabilityDescriptor,
     CapabilityPage,
     OperationPage,
     ProjectManifest,
+    ResourceUpdate,
     TaskSnapshot,
     VerificationPage,
     WorkspaceAttachment,
@@ -32,6 +34,32 @@ def routes(app, store):
         return schema
 
     app.openapi = openapi
+
+    @app.get("/v1/capabilities", response_model=list[CapabilityDescriptor])
+    async def installed_capabilities():
+        from .general_catalog import CATALOG, descriptor
+
+        entries = store.extensions.snapshots([*CATALOG, *store.extensions.tools])
+        return [descriptor(entry) for entry in entries.values()]
+
+    @app.get("/v1/runs/{run_id}/resources")
+    async def resources(run_id: str):
+        return await store.resources(run_id)
+
+    @app.put("/v1/runs/{run_id}/resources")
+    async def update_resources(
+        run_id: str,
+        body: ResourceUpdate,
+        idempotency_key: Annotated[str, Header(min_length=1, max_length=128)],
+    ):
+        return await store.update_resources(run_id, body, idempotency_key)
+
+    @app.get("/v1/skills")
+    async def installed_skills():
+        return [
+            {k: entry[k] for k in ("alias", "description", "version", "registration_id")}
+            for entry in store.extensions.skills.values()
+        ]
 
     @app.post(
         "/v1/workspaces",

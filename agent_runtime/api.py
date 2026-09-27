@@ -162,14 +162,15 @@ def create_app(store: Store | None = None, api_key: str | None = None):
                     {
                         "operation_id": r.id,
                         "origin_run_id": r.run_id,
-                        "result": r.data["result"],
+                        "result": r.data.get("result"),
                         "classification": r.data["status"],
                         "argument_digest": r.data.get("argument_digest"),
                         "registration_id": r.data.get("registration_id"),
                         "effect_policy": r.data.get("effect_policy"),
                     }
                     for r in rows
-                    if r.data.get("result", {}).get("effect")
+                    if (r.data.get("result") or {}).get("effect")
+                    or (r.data.get("external") and r.data.get("status") == "outcome_unknown")
                 ]
         ids = [run_id] + [c.id for c in await store.children(run_id)]
         async with store.database.sessions() as db:

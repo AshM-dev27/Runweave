@@ -1,0 +1,797 @@
+{
+  "model": "jev-1.13.0",
+  "dataset_sha256": "d197cd2acaead0aa8d086031122b9799604bfa2dab244d5ad1b1b89428f5b1c9",
+  "rubric_sha256": "ef7b7d02b908fbbd511c988189ff171e59ff46a1a566bdce1ddfa96a41c2797a",
+  "label_status": "assistant_authored_needs_human_review",
+  "unique_cases": 80,
+  "independent_group_candidates": 35,
+  "repeats": 3,
+  "attempts": 240,
+  "table": {
+    "source_support": {
+      "unique_cases": 18,
+      "expected_judgments": 54,
+      "valid_judgments": 54,
+      "correct_labels": 51,
+      "label_accuracy": 0.9444444444444444,
+      "accepted": 24,
+      "rejected": 18,
+      "review": 12,
+      "false_accepts": 0,
+      "false_rejects": 0,
+      "p50_ms": 723.996,
+      "p95_ms": 1486.33
+    },
+    "requirement_coverage": {
+      "unique_cases": 12,
+      "expected_judgments": 36,
+      "valid_judgments": 36,
+      "correct_labels": 33,
+      "label_accuracy": 0.9166666666666666,
+      "accepted": 18,
+      "rejected": 15,
+      "review": 3,
+      "false_accepts": 0,
+      "false_rejects": 0,
+      "p50_ms": 731.103,
+      "p95_ms": 1560.024
+    },
+    "context_relevance": {
+      "unique_cases": 30,
+      "expected_judgments": 90,
+      "valid_judgments": 90,
+      "correct_labels": 81,
+      "label_accuracy": 0.9,
+      "accepted": 19,
+      "rejected": 31,
+      "review": 40,
+      "false_accepts": 0,
+      "false_rejects": 0,
+      "p50_ms": 751.279,
+      "p95_ms": 1780.118
+    },
+    "action_redundancy": {
+      "unique_cases": 20,
+      "expected_judgments": 60,
+      "valid_judgments": 60,
+      "correct_labels": 57,
+      "label_accuracy": 0.95,
+      "accepted": 28,
+      "rejected": 24,
+      "review": 8,
+      "false_accepts": 1,
+      "false_rejects": 0,
+      "p50_ms": 743.833,
+      "p95_ms": 1910.437
+    }
+  },
+  "label_flips": [],
+  "decision_flips": [
+    "context_01",
+    "context_25",
+    "context_27",
+    "action_09"
+  ],
+  "disagreements_with_provisional_labels": [
+    {
+      "case_id": "citation_05",
+      "task": "source_support",
+      "expected": "insufficient_evidence",
+      "labels": [
+        "contradicted",
+        "contradicted",
+        "contradicted"
+      ],
+      "decisions": [
+        "review",
+        "review",
+        "review"
+      ],
+      "probabilities": [
+        {
+          "supported": 0.0,
+          "contradicted": 0.88,
+          "insufficient_evidence": 0.12
+        },
+        {
+          "supported": 0.0,
+          "contradicted": 0.84,
+          "insufficient_evidence": 0.16
+        },
+        {
+          "insufficient_evidence": 0.15,
+          "supported": 0.0,
+          "contradicted": 0.85
+        }
+      ]
+    },
+    {
+      "case_id": "coverage_07",
+      "task": "requirement_coverage",
+      "expected": "insufficient_context",
+      "labels": [
+        "not_covered",
+        "not_covered",
+        "not_covered"
+      ],
+      "decisions": [
+        "review",
+        "review",
+        "review"
+      ],
+      "probabilities": [
+        {
+          "not_covered": 0.82,
+          "insufficient_context": 0.18,
+          "covered": 0.0
+        },
+        {
+          "not_covered": 0.82,
+          "covered": 0.0,
+          "insufficient_context": 0.18
+        },
+        {
+          "insufficient_context": 0.18,
+          "not_covered": 0.82,
+          "covered": 0.0
+        }
+      ]
+    },
+    {
+      "case_id": "context_15",
+      "task": "context_relevance",
+      "expected": "irrelevant",
+      "labels": [
+        "relevant",
+        "relevant",
+        "relevant"
+      ],
+      "decisions": [
+        "review",
+        "review",
+        "review"
+      ],
+      "probabilities": [
+        {
+          "irrelevant": 0.11,
+          "insufficient_context": 0.13,
+          "relevant": 0.76
+        },
+        {
+          "irrelevant": 0.1,
+          "insufficient_context": 0.16,
+          "relevant": 0.74
+        },
+        {
+          "irrelevant": 0.12,
+          "insufficient_context": 0.16,
+          "relevant": 0.72
+        }
+      ]
+    },
+    {
+      "case_id": "context_29",
+      "task": "context_relevance",
+      "expected": "irrelevant",
+      "labels": [
+        "relevant",
+        "relevant",
+        "relevant"
+      ],
+      "decisions": [
+        "review",
+        "review",
+        "review"
+      ],
+      "probabilities": [
+        {
+          "insufficient_context": 0.12,
+          "relevant": 0.87,
+          "irrelevant": 0.01
+        },
+        {
+          "insufficient_context": 0.13,
+          "irrelevant": 0.01,
+          "relevant": 0.86
+        },
+        {
+          "irrelevant": 0.01,
+          "relevant": 0.87,
+          "insufficient_context": 0.12
+        }
+      ]
+    },
+    {
+      "case_id": "context_30",
+      "task": "context_relevance",
+      "expected": "irrelevant",
+      "labels": [
+        "insufficient_context",
+        "insufficient_context",
+        "insufficient_context"
+      ],
+      "decisions": [
+        "review",
+        "review",
+        "review"
+      ],
+      "probabilities": [
+        {
+          "insufficient_context": 0.62,
+          "relevant": 0.02,
+          "irrelevant": 0.36
+        },
+        {
+          "irrelevant": 0.4,
+          "relevant": 0.03,
+          "insufficient_context": 0.57
+        },
+        {
+          "irrelevant": 0.33,
+          "relevant": 0.03,
+          "insufficient_context": 0.64
+        }
+      ]
+    },
+    {
+      "case_id": "action_09",
+      "task": "action_redundancy",
+      "expected": "insufficient_evidence",
+      "labels": [
+        "useful",
+        "useful",
+        "useful"
+      ],
+      "decisions": [
+        "review",
+        "review",
+        "accept"
+      ],
+      "probabilities": [
+        {
+          "redundant": 0.01,
+          "insufficient_evidence": 0.13,
+          "useful": 0.86
+        },
+        {
+          "insufficient_evidence": 0.12,
+          "redundant": 0.01,
+          "useful": 0.87
+        },
+        {
+          "redundant": 0.0,
+          "useful": 0.9,
+          "insufficient_evidence": 0.1
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 113073,
+    "output_tokens": 11847
+  },
+  "attempts_without_reported_usage": 0,
+  "estimated_reported_usage_cost_usd": 0.004749066000000001,
+  "cost_note": "Published-rate estimate, not an invoice; unknown attempts may add cost.",
+  "p50_ms": 742.016,
+  "p95_ms": 1562.552,
+  "exploratory_threshold_curve": {
+    "0.5": {
+      "accepted": 102,
+      "rejected": 111,
+      "review": 27,
+      "false_accepts": 9,
+      "false_rejects": 0
+    },
+    "0.6": {
+      "accepted": 102,
+      "rejected": 106,
+      "review": 32,
+      "false_accepts": 9,
+      "false_rejects": 0
+    },
+    "0.7": {
+      "accepted": 102,
+      "rejected": 105,
+      "review": 33,
+      "false_accepts": 9,
+      "false_rejects": 0
+    },
+    "0.8": {
+      "accepted": 99,
+      "rejected": 102,
+      "review": 39,
+      "false_accepts": 6,
+      "false_rejects": 0
+    },
+    "0.9": {
+      "accepted": 89,
+      "rejected": 88,
+      "review": 63,
+      "false_accepts": 1,
+      "false_rejects": 0
+    },
+    "0.95": {
+      "accepted": 75,
+      "rejected": 78,
+      "review": 87,
+      "false_accepts": 0,
+      "false_rejects": 0
+    },
+    "0.99": {
+      "accepted": 59,
+      "rejected": 78,
+      "review": 103,
+      "false_accepts": 0,
+      "false_rejects": 0
+    }
+  },
+  "primary_threshold": 0.9,
+  "per_repeat": [
+    {
+      "overall": {
+        "cases": 80,
+        "valid_responses": 80,
+        "missing_or_invalid_responses": 0,
+        "label_accuracy_on_valid_responses": 0.925,
+        "macro_f1_on_observed_classes": 0.8414163808900651,
+        "confusion": {
+          "contradicted -> contradicted": 6,
+          "covered -> covered": 6,
+          "insufficient_context -> insufficient_context": 3,
+          "insufficient_context -> not_covered": 1,
+          "insufficient_evidence -> contradicted": 1,
+          "insufficient_evidence -> insufficient_evidence": 5,
+          "insufficient_evidence -> useful": 1,
+          "irrelevant -> insufficient_context": 1,
+          "irrelevant -> irrelevant": 16,
+          "irrelevant -> relevant": 2,
+          "not_covered -> not_covered": 5,
+          "redundant -> redundant": 8,
+          "relevant -> relevant": 8,
+          "supported -> supported": 8,
+          "useful -> useful": 9
+        },
+        "multiclass_brier_sum": 0.1218925,
+        "top_probability_ece_10_bins": 0.07599999999999996,
+        "accepted": 30,
+        "rejected": 29,
+        "review": 21,
+        "automatic_decision_coverage": 0.7375,
+        "false_accepts": 0,
+        "false_accept_rate_among_nonpassing_cases": 0.0,
+        "error_rate_among_accepted_cases": 0.0,
+        "false_rejects": 0,
+        "false_reject_rate_among_passing_cases": 0.0,
+        "passing_cases_sent_to_review": 1,
+        "zero_false_accept_upper_95_one_sided_iid_only": 0.059306014189697054
+      },
+      "by_task": {
+        "action_redundancy": {
+          "cases": 20,
+          "valid_responses": 20,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.95,
+          "macro_f1_on_observed_classes": 0.9157894736842106,
+          "confusion": {
+            "insufficient_evidence -> insufficient_evidence": 2,
+            "insufficient_evidence -> useful": 1,
+            "redundant -> redundant": 8,
+            "useful -> useful": 9
+          },
+          "multiclass_brier_sum": 0.09296,
+          "top_probability_ece_10_bins": 0.07450000000000004,
+          "accepted": 9,
+          "rejected": 8,
+          "review": 3,
+          "automatic_decision_coverage": 0.85,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.2384041903808527
+        },
+        "context_relevance": {
+          "cases": 30,
+          "valid_responses": 30,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9,
+          "macro_f1_on_observed_classes": 0.8867724867724868,
+          "confusion": {
+            "insufficient_context -> insufficient_context": 3,
+            "irrelevant -> insufficient_context": 1,
+            "irrelevant -> irrelevant": 16,
+            "irrelevant -> relevant": 2,
+            "relevant -> relevant": 8
+          },
+          "multiclass_brier_sum": 0.16441333333333336,
+          "top_probability_ece_10_bins": 0.09066666666666662,
+          "accepted": 7,
+          "rejected": 10,
+          "review": 13,
+          "automatic_decision_coverage": 0.5666666666666667,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 1,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.12730543165483876
+        },
+        "requirement_coverage": {
+          "cases": 12,
+          "valid_responses": 12,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9166666666666666,
+          "macro_f1_on_observed_classes": 0.6363636363636364,
+          "confusion": {
+            "covered -> covered": 6,
+            "insufficient_context -> not_covered": 1,
+            "not_covered -> not_covered": 5
+          },
+          "multiclass_brier_sum": 0.11328333333333333,
+          "top_probability_ece_10_bins": 0.08083333333333335,
+          "accepted": 6,
+          "rejected": 5,
+          "review": 1,
+          "automatic_decision_coverage": 0.9166666666666666,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.39303776899708276
+        },
+        "source_support": {
+          "cases": 18,
+          "valid_responses": 18,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9444444444444444,
+          "macro_f1_on_observed_classes": 0.9267399267399267,
+          "confusion": {
+            "contradicted -> contradicted": 6,
+            "insufficient_evidence -> contradicted": 1,
+            "insufficient_evidence -> insufficient_evidence": 3,
+            "supported -> supported": 8
+          },
+          "multiclass_brier_sum": 0.08891111111111111,
+          "top_probability_ece_10_bins": 0.05000000000000002,
+          "accepted": 8,
+          "rejected": 6,
+          "review": 4,
+          "automatic_decision_coverage": 0.7777777777777778,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.2588655508930523
+        }
+      }
+    },
+    {
+      "overall": {
+        "cases": 80,
+        "valid_responses": 80,
+        "missing_or_invalid_responses": 0,
+        "label_accuracy_on_valid_responses": 0.925,
+        "macro_f1_on_observed_classes": 0.8414163808900651,
+        "confusion": {
+          "contradicted -> contradicted": 6,
+          "covered -> covered": 6,
+          "insufficient_context -> insufficient_context": 3,
+          "insufficient_context -> not_covered": 1,
+          "insufficient_evidence -> contradicted": 1,
+          "insufficient_evidence -> insufficient_evidence": 5,
+          "insufficient_evidence -> useful": 1,
+          "irrelevant -> insufficient_context": 1,
+          "irrelevant -> irrelevant": 16,
+          "irrelevant -> relevant": 2,
+          "not_covered -> not_covered": 5,
+          "redundant -> redundant": 8,
+          "relevant -> relevant": 8,
+          "supported -> supported": 8,
+          "useful -> useful": 9
+        },
+        "multiclass_brier_sum": 0.11883999999999999,
+        "top_probability_ece_10_bins": 0.060999999999999964,
+        "accepted": 29,
+        "rejected": 30,
+        "review": 21,
+        "automatic_decision_coverage": 0.7375,
+        "false_accepts": 0,
+        "false_accept_rate_among_nonpassing_cases": 0.0,
+        "error_rate_among_accepted_cases": 0.0,
+        "false_rejects": 0,
+        "false_reject_rate_among_passing_cases": 0.0,
+        "passing_cases_sent_to_review": 2,
+        "zero_false_accept_upper_95_one_sided_iid_only": 0.059306014189697054
+      },
+      "by_task": {
+        "action_redundancy": {
+          "cases": 20,
+          "valid_responses": 20,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.95,
+          "macro_f1_on_observed_classes": 0.9157894736842106,
+          "confusion": {
+            "insufficient_evidence -> insufficient_evidence": 2,
+            "insufficient_evidence -> useful": 1,
+            "redundant -> redundant": 8,
+            "useful -> useful": 9
+          },
+          "multiclass_brier_sum": 0.09133,
+          "top_probability_ece_10_bins": 0.07149999999999998,
+          "accepted": 9,
+          "rejected": 8,
+          "review": 3,
+          "automatic_decision_coverage": 0.85,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.2384041903808527
+        },
+        "context_relevance": {
+          "cases": 30,
+          "valid_responses": 30,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9,
+          "macro_f1_on_observed_classes": 0.8867724867724868,
+          "confusion": {
+            "insufficient_context -> insufficient_context": 3,
+            "irrelevant -> insufficient_context": 1,
+            "irrelevant -> irrelevant": 16,
+            "irrelevant -> relevant": 2,
+            "relevant -> relevant": 8
+          },
+          "multiclass_brier_sum": 0.16185333333333332,
+          "top_probability_ece_10_bins": 0.05200000000000001,
+          "accepted": 6,
+          "rejected": 11,
+          "review": 13,
+          "automatic_decision_coverage": 0.5666666666666667,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 2,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.12730543165483876
+        },
+        "requirement_coverage": {
+          "cases": 12,
+          "valid_responses": 12,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9166666666666666,
+          "macro_f1_on_observed_classes": 0.6363636363636364,
+          "confusion": {
+            "covered -> covered": 6,
+            "insufficient_context -> not_covered": 1,
+            "not_covered -> not_covered": 5
+          },
+          "multiclass_brier_sum": 0.11359999999999999,
+          "top_probability_ece_10_bins": 0.0833333333333333,
+          "accepted": 6,
+          "rejected": 5,
+          "review": 1,
+          "automatic_decision_coverage": 0.9166666666666666,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.39303776899708276
+        },
+        "source_support": {
+          "cases": 18,
+          "valid_responses": 18,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9444444444444444,
+          "macro_f1_on_observed_classes": 0.9267399267399267,
+          "confusion": {
+            "contradicted -> contradicted": 6,
+            "insufficient_evidence -> contradicted": 1,
+            "insufficient_evidence -> insufficient_evidence": 3,
+            "supported -> supported": 8
+          },
+          "multiclass_brier_sum": 0.0812111111111111,
+          "top_probability_ece_10_bins": 0.04944444444444444,
+          "accepted": 8,
+          "rejected": 6,
+          "review": 4,
+          "automatic_decision_coverage": 0.7777777777777778,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.2588655508930523
+        }
+      }
+    },
+    {
+      "overall": {
+        "cases": 80,
+        "valid_responses": 80,
+        "missing_or_invalid_responses": 0,
+        "label_accuracy_on_valid_responses": 0.925,
+        "macro_f1_on_observed_classes": 0.8414163808900651,
+        "confusion": {
+          "contradicted -> contradicted": 6,
+          "covered -> covered": 6,
+          "insufficient_context -> insufficient_context": 3,
+          "insufficient_context -> not_covered": 1,
+          "insufficient_evidence -> contradicted": 1,
+          "insufficient_evidence -> insufficient_evidence": 5,
+          "insufficient_evidence -> useful": 1,
+          "irrelevant -> insufficient_context": 1,
+          "irrelevant -> irrelevant": 16,
+          "irrelevant -> relevant": 2,
+          "not_covered -> not_covered": 5,
+          "redundant -> redundant": 8,
+          "relevant -> relevant": 8,
+          "supported -> supported": 8,
+          "useful -> useful": 9
+        },
+        "multiclass_brier_sum": 0.11909499999999999,
+        "top_probability_ece_10_bins": 0.03112499999999998,
+        "accepted": 30,
+        "rejected": 29,
+        "review": 21,
+        "automatic_decision_coverage": 0.7375,
+        "false_accepts": 1,
+        "false_accept_rate_among_nonpassing_cases": 0.02040816326530612,
+        "error_rate_among_accepted_cases": 0.03333333333333333,
+        "false_rejects": 0,
+        "false_reject_rate_among_passing_cases": 0.0,
+        "passing_cases_sent_to_review": 2,
+        "zero_false_accept_upper_95_one_sided_iid_only": null
+      },
+      "by_task": {
+        "action_redundancy": {
+          "cases": 20,
+          "valid_responses": 20,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.95,
+          "macro_f1_on_observed_classes": 0.9157894736842106,
+          "confusion": {
+            "insufficient_evidence -> insufficient_evidence": 2,
+            "insufficient_evidence -> useful": 1,
+            "redundant -> redundant": 8,
+            "useful -> useful": 9
+          },
+          "multiclass_brier_sum": 0.09304,
+          "top_probability_ece_10_bins": 0.06199999999999996,
+          "accepted": 10,
+          "rejected": 8,
+          "review": 2,
+          "automatic_decision_coverage": 0.9,
+          "false_accepts": 1,
+          "false_accept_rate_among_nonpassing_cases": 0.09090909090909091,
+          "error_rate_among_accepted_cases": 0.1,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": null
+        },
+        "context_relevance": {
+          "cases": 30,
+          "valid_responses": 30,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9,
+          "macro_f1_on_observed_classes": 0.8867724867724868,
+          "confusion": {
+            "insufficient_context -> insufficient_context": 3,
+            "irrelevant -> insufficient_context": 1,
+            "irrelevant -> irrelevant": 16,
+            "irrelevant -> relevant": 2,
+            "relevant -> relevant": 8
+          },
+          "multiclass_brier_sum": 0.16040666666666667,
+          "top_probability_ece_10_bins": 0.06066666666666664,
+          "accepted": 6,
+          "rejected": 10,
+          "review": 14,
+          "automatic_decision_coverage": 0.5333333333333333,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 2,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.12730543165483876
+        },
+        "requirement_coverage": {
+          "cases": 12,
+          "valid_responses": 12,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9166666666666666,
+          "macro_f1_on_observed_classes": 0.6363636363636364,
+          "confusion": {
+            "covered -> covered": 6,
+            "insufficient_context -> not_covered": 1,
+            "not_covered -> not_covered": 5
+          },
+          "multiclass_brier_sum": 0.11353333333333333,
+          "top_probability_ece_10_bins": 0.08166666666666668,
+          "accepted": 6,
+          "rejected": 5,
+          "review": 1,
+          "automatic_decision_coverage": 0.9166666666666666,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.39303776899708276
+        },
+        "source_support": {
+          "cases": 18,
+          "valid_responses": 18,
+          "missing_or_invalid_responses": 0,
+          "label_accuracy_on_valid_responses": 0.9444444444444444,
+          "macro_f1_on_observed_classes": 0.9267399267399267,
+          "confusion": {
+            "contradicted -> contradicted": 6,
+            "insufficient_evidence -> contradicted": 1,
+            "insufficient_evidence -> insufficient_evidence": 3,
+            "supported -> supported": 8
+          },
+          "multiclass_brier_sum": 0.08289999999999999,
+          "top_probability_ece_10_bins": 0.04722222222222226,
+          "accepted": 8,
+          "rejected": 6,
+          "review": 4,
+          "automatic_decision_coverage": 0.7777777777777778,
+          "false_accepts": 0,
+          "false_accept_rate_among_nonpassing_cases": 0.0,
+          "error_rate_among_accepted_cases": 0.0,
+          "false_rejects": 0,
+          "false_reject_rate_among_passing_cases": 0.0,
+          "passing_cases_sent_to_review": 0,
+          "zero_false_accept_upper_95_one_sided_iid_only": 0.2588655508930523
+        }
+      }
+    }
+  ],
+  "retrieval_comparison": {
+    "note": "Three-candidate synthetic packs, one relevant passage at most; not a production RAG benchmark.",
+    "lexical_cosine": {
+      "answerable_groups": 8,
+      "expected_recall_at_1_with_fractional_ties": 0.3125,
+      "no_answer_or_ambiguous_groups": 2,
+      "correct_abstentions": 1
+    },
+    "jev_per_repeat": [
+      {
+        "answerable_groups": 8,
+        "expected_recall_at_1_with_fractional_ties": 0.875,
+        "no_answer_or_ambiguous_groups": 2,
+        "correct_abstentions": 2
+      },
+      {
+        "answerable_groups": 8,
+        "expected_recall_at_1_with_fractional_ties": 0.75,
+        "no_answer_or_ambiguous_groups": 2,
+        "correct_abstentions": 2
+      },
+      {
+        "answerable_groups": 8,
+        "expected_recall_at_1_with_fractional_ties": 0.75,
+        "no_answer_or_ambiguous_groups": 2,
+        "correct_abstentions": 2
+      }
+    ]
+  },
+  "caution": "Authored seed cases; repeated judgments and paired variants are not independent samples."
+}

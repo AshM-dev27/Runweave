@@ -131,6 +131,12 @@ class Client:
     async def operation_output(self, run_id, operation_id, name):
         return await self.verified_bytes(f"/v1/runs/{run_id}/operations/{operation_id}/outputs/{name}")
 
+    async def installed_capabilities(self):
+        return await self.request("GET", "/v1/capabilities", retry=True)
+
+    async def skills(self):
+        return await self.request("GET", "/v1/skills", retry=True)
+
     async def tools(self):
         return await self.request("GET", "/v1/tools", retry=True)
 
@@ -257,16 +263,30 @@ class Client:
     async def deny(self, run_id, approval_id):
         return await self.decide(run_id, approval_id, False)
 
+    async def resources(self, run_id):
+        return await self.request("GET", f"/v1/runs/{run_id}/resources", retry=True)
+
+    async def update_resources(self, run_id, *, expected_version, limits, idempotency_key=None):
+        return await self.request(
+            "PUT",
+            f"/v1/runs/{run_id}/resources",
+            retry=True,
+            headers={"Idempotency-Key": idempotency_key or uuid4().hex},
+            json={"expected_version": expected_version, "limits": limits},
+        )
+
     async def cancel(self, run_id):
         return Run.model_validate(await self.request("POST", f"/v1/runs/{run_id}/cancel", retry=True))
 
-    async def wait(self, run_id, *, timeout=150, stop_at_approval=True):
+    async def wait(self, run_id, *, timeout=150, stop_at_approval=True, stop_at_budget=True):
         try:
             async with asyncio.timeout(timeout):
                 while True:
                     run = await self.get(run_id)
-                    if (run.status in TERMINAL and run.cleanup_state == "complete") or (
-                        stop_at_approval and run.status == "awaiting_approval"
+                    if (
+                        (run.status in TERMINAL and run.cleanup_state == "complete")
+                        or (stop_at_approval and run.status == "awaiting_approval")
+                        or (stop_at_budget and run.status == "paused_budget")
                     ):
                         return run
                     await asyncio.sleep(0.2)

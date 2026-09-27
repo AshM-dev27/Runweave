@@ -3,14 +3,23 @@
 import copy
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from .general_db import GeneralOperationRow, GeneralRecordRow
 from .project_store import digest, fail
+from .resources import ResourceBlocked
 from .runtime import get_store
 
 
 @activity.defn
 async def general_completion(data: dict):
+    try:
+        return await prepare_completion(data)
+    except ResourceBlocked as exc:
+        raise ApplicationError(exc.detail, exc.snapshot, non_retryable=True) from None
+
+
+async def prepare_completion(data):
     store = get_store()
     run_id, start = data["run_id"], data["step"]
     async with store.database.sessions.begin() as db:
@@ -147,9 +156,9 @@ async def general_completion(data: dict):
                         from sqlalchemy import select
 
                         sources = await db.scalars(
-                            select(GeneralRecordRow).where(
-                                GeneralRecordRow.run_id == run_id, GeneralRecordRow.kind == "verification"
-                            )
+                            select(GeneralRecordRow)
+                            .where(GeneralRecordRow.run_id == run_id, GeneralRecordRow.kind == "verification")
+                            .order_by(GeneralRecordRow.sequence)
                         )
                         disposition["evidence_ids"] = [
                             r.id

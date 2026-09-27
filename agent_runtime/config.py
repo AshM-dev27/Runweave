@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     api_key: SecretStr = SecretStr("")
     model_registry_file: str = "config/models.json"
     tool_registry_file: str = "config/tools.json"
+    extension_registry_file: str = "config/extensions.json"
     openai_force_ipv4: bool = True
     approval_wait_seconds: int = Field(default=86400, ge=1, le=604800)
     max_active_runs: int = 20

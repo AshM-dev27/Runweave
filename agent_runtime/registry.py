@@ -25,6 +25,8 @@ class Registration(BaseModel):
     max_output_tokens: int = Field(ge=128, le=1000000)
     total_tokens_limit: int = Field(ge=128, le=1000000)
 
+    token_counter: Literal["utf8-v1", "o200k-v1"] = "utf8-v1"
+
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
 
     @model_validator(mode="after")
@@ -62,6 +64,8 @@ class Registration(BaseModel):
     def identity(self):
         data = self.model_dump()
         # Preserve identities of retained registrations created before this optional field.
+        if self.token_counter == "utf8-v1":
+            data.pop("token_counter")
         if self.reasoning_effort is None:
             data.pop("reasoning_effort")
         encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()

@@ -44,7 +44,15 @@ class Dispatcher:
                             task_queue=self.task_queue + "-v3" if version == 3 else self.task_queue,
                             execution_timeout=timedelta(
                                 seconds=(
-                                    run.config["general"]["limits"]["active_seconds"]
+                                    (await self.store.general(run.id))
+                                    .get("resource_state", {})
+                                    .get("ceilings", {})
+                                    .get("active_seconds", run.config["general"]["limits"]["active_seconds"])
+                                    + (
+                                        (run.config["general"].get("resources") or {}).get(
+                                            "max_pause_seconds", 0
+                                        )
+                                    )
                                     if version == 3
                                     else run.config["timeout_seconds"]
                                 )
@@ -60,7 +68,9 @@ class Dispatcher:
                         if item.kind == "cancel":
                             await handle.cancel()
                         else:
-                            await handle.signal("decision", item.payload)
+                            await handle.signal(
+                                "resources" if item.kind == "resources" else "decision", item.payload
+                            )
                     except RPCError as exc:
                         if exc.status != RPCStatusCode.NOT_FOUND:
                             raise
@@ -136,11 +146,10 @@ class Dispatcher:
                         children_done = False
                 except RPCError:
                     children_done = False
-            if children_done:
-                try:
-                    await self.store.general_cleanup(gr.run_id)
-                except Exception:
-                    pass
+            try:
+                await self.store.general_cleanup(gr.run_id, allow_complete=children_done)
+            except Exception:
+                pass
 
     async def run(self):
         while True:

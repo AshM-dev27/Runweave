@@ -55,3 +55,7 @@ Before project work, verify that the operator digest in `config/general.json` ex
 Keep broker/application state across restarts so interrupted jobs can reconcile. Downloads validate immutable bytes. This is one authenticated workspace, not multi-tenant ownership.
 
 Telemetry is off by default. `OTEL_EXPORTER_OTLP_ENDPOINT` enables allowlisted metadata spans excluding prompts, responses, arguments, exception bodies and credentials. PostgreSQL and Temporal histories still contain task content and require private storage. See [validation restrictions](validation-index.md#campaign-restrictions) before any acceptance work.
+
+## Installed extensions and ambiguous effects
+
+The [harness operator guide](harness-foundations.md#tools-and-mcp) covers `EXTENSION_REGISTRY_FILE`, schema/version pinning, environment-based credentials, and deployment compatibility. Ambiguous external writes remain visible through `/v1/runs/{id}/effects` as `outcome_unknown`; they block completion and further external mutations. Inspect the durable operation and upstream idempotency record before any manual resolution. Do not repeat the write with a new operation identity. Missing handler/context/backend versions fail closed.

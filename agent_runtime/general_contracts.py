@@ -10,11 +10,11 @@ class Contract(BaseModel):
 
 
 class GeneralLimits(Contract):
-    model_attempts: int = Field(default=12, ge=1, le=24)
-    tool_attempts: int = Field(default=48, ge=2, le=96)
-    total_tokens: int = Field(default=16000, ge=1024, le=16000)
-    active_seconds: int = Field(default=600, ge=10, le=1800)
-    command_attempts: int = Field(default=16, ge=2, le=16)
+    model_attempts: int = Field(default=12, ge=1)
+    tool_attempts: int = Field(default=48, ge=2)
+    total_tokens: int = Field(default=16000, ge=1024)
+    active_seconds: int = Field(default=600, ge=10)
+    command_attempts: int = Field(default=16, ge=2)
     files: int = Field(default=256, ge=1, le=256)
     file_bytes: int = Field(default=262144, ge=1, le=262144)
     revision_bytes: int = Field(default=4194304, ge=1, le=4194304)
@@ -23,11 +23,11 @@ class GeneralLimits(Contract):
 
 
 class ChildLimits(Contract):
-    model_attempts: int = Field(default=4, ge=1, le=4)
-    tool_attempts: int = Field(default=16, ge=1, le=16)
-    command_attempts: int = Field(default=4, ge=1, le=4)
-    active_seconds: int = Field(default=240, ge=10, le=240)
-    total_tokens: int = Field(default=8000, ge=1024, le=16000)
+    model_attempts: int = Field(default=4, ge=1)
+    tool_attempts: int = Field(default=16, ge=1)
+    command_attempts: int = Field(default=4, ge=1)
+    active_seconds: int = Field(default=240, ge=10)
+    total_tokens: int = Field(default=8000, ge=1024)
 
 
 class DelegationPolicy(Contract):
@@ -38,12 +38,53 @@ class DelegationPolicy(Contract):
     limits: ChildLimits = Field(default_factory=ChildLimits)
 
 
+class CompletionReviewPolicy(Contract):
+    """Optional second judgment; never substitutes for authoritative check receipts."""
+
+    provider: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9._-]+$", max_length=100)
+    model: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9._-]+$", max_length=100)
+    max_tokens: int = Field(default=1024, ge=256, le=2048)
+    threshold: float = Field(default=0.9, ge=0.5, le=1)
+    scope: Literal["root", "all"] = "root"
+
+    @model_validator(mode="after")
+    def paired_model(self):
+        if bool(self.provider) != bool(self.model):
+            raise ValueError("Review provider and model must be supplied together")
+        return self
+
+
+class FinalizationReserve(Contract):
+    model_attempts: int = Field(default=1, ge=0)
+    tool_attempts: int = Field(default=2, ge=0)
+    command_attempts: int = Field(default=2, ge=0)
+    total_tokens: int = Field(default=3584, ge=0)
+
+
+class ResourcePolicy(Contract):
+    allocation: Literal["shared", "fixed"] = "shared"
+    on_limit: Literal["pause", "fail"] = "pause"
+    max_pause_seconds: int = Field(default=86400, ge=1, le=604800)
+    finalization: FinalizationReserve = Field(default_factory=FinalizationReserve)
+
+
+class ResourceUpdate(Contract):
+    expected_version: int = Field(ge=1, strict=True)
+    limits: dict[
+        Literal["model_attempts", "tool_attempts", "command_attempts", "total_tokens", "active_seconds"],
+        Annotated[int, Field(strict=True, ge=1)],
+    ] = Field(min_length=1)
+
+
 class GeneralPolicy(Contract):
     schema_version: Literal[3] = 3
     limits: GeneralLimits = Field(default_factory=GeneralLimits)
-    workspace_policy: Literal["python-project-v3"] = "python-project-v3"
+    resources: ResourcePolicy | None = None
+    workspace_policy: str = Field(default="python-project-v3", pattern=r"^[a-zA-Z0-9._-]+$", max_length=100)
     delegation: DelegationPolicy | None = None
-    context_policy: Literal["bounded-v3"] = "bounded-v3"
+    context_policy: str = Field(default="memory-v1", pattern=r"^[a-zA-Z0-9._-]+$", max_length=100)
+    review: CompletionReviewPolicy | None = None
+    skills: list[str] = Field(default_factory=list, max_length=8)
     evidence_policy: Literal["scoped-v3"] = "scoped-v3"
     effect_policy: Literal["declared-v3"] = "declared-v3"
 
@@ -148,6 +189,7 @@ class CompletionAssessment(Contract):
     limitations: list[Annotated[str, Field(max_length=512)]] = Field(default_factory=list, max_length=8)
     stop_reason: str | None = None
     accepted: bool = False
+    review: dict | None = None
 
 
 class FileInput(Contract):
