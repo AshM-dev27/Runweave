@@ -3,6 +3,7 @@
 import copy
 
 RESOURCE_KEYS = ("model_attempts", "tool_attempts", "command_attempts", "total_tokens", "active_seconds")
+LEGACY_DEFAULTS = dict(zip(RESOURCE_KEYS, (12, 48, 16, 16000, 600), strict=True))
 LEGACY_CEILINGS = dict(zip(RESOURCE_KEYS, (24, 96, 16, 16000, 1800), strict=True))
 
 
@@ -71,6 +72,10 @@ def check(root, gr, kind, required=1, reserve=0):
                     if local
                     else state.get("sources", {}).get(kind, "run.limits"),
                     "limit": limit,
+                    "limit_type": "budget"
+                    if local
+                    or state.get("sources", {}).get(kind) in {"agent.limits", "authorized_update", "default"}
+                    else "ceiling",
                     "used": used,
                     "reserved": held,
                     "required": required,
@@ -106,12 +111,15 @@ def snapshot(root, gr):
             k: reserve_for(root.data, k) for k in RESOURCE_KEYS if k != "active_seconds"
         },
         "limits": copy.deepcopy(root.data["policy"]["limits"]),
+        "task_limits": copy.deepcopy(state.get("task_limits", root.data["policy"]["limits"])),
+        "ceiling_sources": state.get("ceiling_sources", {}),
         "ceilings": state["ceilings"],
         "sources": state["sources"],
         "usage": copy.deepcopy(root.data["budget"]),
         "child_limits": gr.data.get("local_limits") if gr.parent_id and not shared(root.data) else None,
         "child_estimate": gr.data.get("local_limits") if gr.parent_id and shared(root.data) else None,
         "pause": state.get("pause"),
+        "adaptive": copy.deepcopy(root.data.get("adaptive")),
     }
 
 
@@ -127,26 +135,31 @@ async def settle_model_attempt(store, run_id, attempt_id, *, tokens=None, refuse
         if tokens is None and refused is None:
             attempt.data = {**attempt.data, "outcome": "dispatch_unknown"}
             return
-        amount = attempt.data["reserved_tokens"]
-        data = copy.deepcopy(root.data)
-        data["budget"]["reserved_tokens"] -= amount
-        data["budget"]["reported_tokens"] += tokens or 0
+        settle_model_attempt_locked(gr, root, attempt, tokens=tokens, refused=refused)
+
+
+def settle_model_attempt_locked(gr, root, attempt, *, tokens=None, refused=None):
+    """Caller holds the root lock; accounting and audit can commit atomically."""
+    amount = attempt.data["reserved_tokens"]
+    data = copy.deepcopy(root.data)
+    data["budget"]["reserved_tokens"] -= amount
+    data["budget"]["reported_tokens"] += tokens or 0
+    if refused is not None:
+        data["budget"]["model_attempts"] -= 1
+        if not gr.parent_id:
+            data["local_usage"]["model_attempts"] -= 1
+    root.data = data
+    if gr.parent_id:
+        child = copy.deepcopy(gr.data)
+        child["reserved_tokens"] -= amount
+        child["reported_tokens"] = child.get("reported_tokens", 0) + (tokens or 0)
         if refused is not None:
-            data["budget"]["model_attempts"] -= 1
-            if not gr.parent_id:
-                data["local_usage"]["model_attempts"] -= 1
-        root.data = data
-        if gr.parent_id:
-            child = copy.deepcopy(gr.data)
-            child["reserved_tokens"] -= amount
-            child["reported_tokens"] = child.get("reported_tokens", 0) + (tokens or 0)
-            if refused is not None:
-                child["local_usage"]["model_attempts"] -= 1
-            gr.data = child
-        attempt.data = {
-            **attempt.data,
-            "settled": True,
-            "reported_tokens": tokens or 0,
-            "outcome": "not_dispatched" if refused is not None else "complete",
-            **({"reason": refused.reason} if refused is not None else {}),
-        }
+            child["local_usage"]["model_attempts"] -= 1
+        gr.data = child
+    attempt.data = {
+        **attempt.data,
+        "settled": True,
+        "reported_tokens": tokens or 0,
+        "outcome": "not_dispatched" if refused is not None else "complete",
+        **({"reason": refused.reason} if refused is not None else {}),
+    }

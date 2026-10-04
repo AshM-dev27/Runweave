@@ -1,6 +1,7 @@
 [project]
 name = "agent-runtime"
-description = "An owned API for iterative task planning, authorized tools, scoped subagents, verification and results."
+description = "Self-hosted API for durable AI agents with tools, approvals, and resource controls."
+license = "Apache-2.0"
 version = "0.1.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
@@ -17,7 +18,13 @@ dependencies = [
     "pydantic-settings==2.15.0",
     "sqlalchemy[asyncio]==2.0.52",
     "uvicorn[standard]==0.52.4",
+    "browser-use-sdk==3.11.3",
 ]
+
+[project.urls]
+Repository = "https://github.com/AshM-dev27/Runweave"
+Documentation = "https://github.com/AshM-dev27/Runweave/blob/main/docs/usage.md"
+Issues = "https://github.com/AshM-dev27/Runweave/issues"
 
 [dependency-groups]
 dev = [

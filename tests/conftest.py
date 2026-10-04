@@ -32,6 +32,8 @@ def no_paid_calls(request, monkeypatch):
     import pydantic_ai.models
 
     monkeypatch.setattr(pydantic_ai.models, "ALLOW_MODEL_REQUESTS", "live" in request.keywords)
+    if "live" not in request.keywords:
+        monkeypatch.delenv("BROWSER_USE_API_KEY", raising=False)
 
 
 @pytest_asyncio.fixture

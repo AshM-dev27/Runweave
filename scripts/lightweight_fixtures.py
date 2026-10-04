@@ -70,7 +70,7 @@ def fixture(name):
 
 def config(name):
     f = fixture(name)
-    policy = GeneralPolicy(limits={"model_attempts": MANIFEST["scenario_limits"][name]})
+    policy = GeneralPolicy(resources=None, limits={"model_attempts": MANIFEST["scenario_limits"][name]})
     if name in {"direct", "parallel"}:
         policy.delegation = DelegationPolicy(tools=f["tools"], limits={"model_attempts": 3})
         policy = GeneralPolicy.model_validate(policy.model_dump())

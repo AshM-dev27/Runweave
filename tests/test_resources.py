@@ -16,7 +16,13 @@ from agent_runtime.client import ClientError
 from agent_runtime.general_contracts import GeneralPolicy
 from agent_runtime.general_db import GeneralAttemptRow, GeneralOperationRow
 from agent_runtime.general_runtime import general_step
-from agent_runtime.resources import RequestNotDispatched, ResourceBlocked, check, settle_model_attempt
+from agent_runtime.resources import (
+    LEGACY_DEFAULTS,
+    RequestNotDispatched,
+    ResourceBlocked,
+    check,
+    settle_model_attempt,
+)
 from agent_runtime.store import Problem
 
 
@@ -34,6 +40,7 @@ async def child_run(store, client, allocation="shared", resources=True):
         workspace,
         policy=GeneralPolicy(
             resources={"allocation": allocation} if resources else None,
+            limits=LEGACY_DEFAULTS,
             delegation={"tools": ["add"]},
         ),
     )
@@ -79,7 +86,7 @@ async def test_children_share_actual_spending_and_fixed_limits_remain_explicit(s
 
 async def test_update_contract_auth_version_idempotency_and_ceiling(store):
     async with http_client(store) as client:
-        run = await submit(client, policy=GeneralPolicy(resources={}))
+        run = await submit(client, policy=GeneralPolicy(resources={}, limits=LEGACY_DEFAULTS))
         before = await client.resources(run.id)
         update = dict(expected_version=1, limits={"model_attempts": 30}, idempotency_key="raise-1")
         result = await client.update_resources(run.id, **update)
@@ -130,7 +137,7 @@ async def test_model_reservation_settlement_is_typed_and_exactly_once(store, mon
 
     monkeypatch.setattr("agent_runtime.general_runtime.build_model", lambda _: FunctionModel(reject))
     async with http_client(store) as client:
-        run = await submit(client, policy=GeneralPolicy(resources={}))
+        run = await submit(client, policy=GeneralPolicy(resources={}, limits=LEGACY_DEFAULTS))
         with pytest.raises(ApplicationError):
             await general_step({"run_id": run.id, "completion_loop": 2})
         async with store.database.sessions() as db:
@@ -153,7 +160,7 @@ async def test_model_reservation_settlement_is_typed_and_exactly_once(store, mon
 
 async def test_capacity_wait_does_not_spend_and_releases_on_settlement(store):
     async with http_client(store) as client:
-        run = await submit(client, policy=GeneralPolicy(resources={}))
+        run = await submit(client, policy=GeneralPolicy(resources={}, limits=LEGACY_DEFAULTS))
         async with store.database.sessions.begin() as db:
             _, gr, root = await store.general_lock(db, run.id)
             data = copy.deepcopy(root.data)
@@ -187,7 +194,7 @@ async def test_inflight_model_result_survives_another_resource_pause(store, monk
 
     calls = stub(monkeypatch, response)
     async with http_client(store) as client:
-        run = await submit(client, policy=GeneralPolicy(resources={}))
+        run = await submit(client, policy=GeneralPolicy(resources={}, limits=LEGACY_DEFAULTS))
         task = asyncio.create_task(general_step({"run_id": run.id, "completion_loop": 2}))
         await asyncio.wait_for(started.wait(), 10)
         block = {
@@ -257,10 +264,11 @@ async def test_resource_policy_has_no_extra_model_payload_tokens(store, monkeypa
                 tools = ["workspace_read"] if workspace else ["add"] if scenario == "delegation" else []
                 policy = GeneralPolicy(
                     resources={} if modern else None,
+                    limits=LEGACY_DEFAULTS,
                     delegation={"tools": ["add"]} if scenario == "delegation" else None,
                 )
                 rid = (await submit(client, tools, workspace, policy=policy)).id
-            await general_step({"run_id": rid, "completion_loop": 2})
+            await general_step({"run_id": rid, "completion_loop": 2, "batch_checks": True})
     enc = tiktoken.get_encoding("o200k_base")
     counts = [len(enc.encode(p, disallowed_special=())) for p in payloads]
     print(json.dumps({"scenario": scenario, "legacy_tokens": counts[0], "shared_tokens": counts[1]}))
@@ -310,7 +318,9 @@ async def test_explicit_resource_configuration_replaces_legacy_allocation_guesse
         assert snapshot["limits"]["model_attempts"] == 30
         assert snapshot["finalization_reserve"]["total_tokens"] == 0
         workspace = await client.workspace_create({"x": b"x"})
-        root = await submit(client, [], workspace, policy=GeneralPolicy(resources={}, delegation={}))
+        root = await submit(
+            client, [], workspace, policy=GeneralPolicy(resources={}, delegation={}, limits=LEGACY_DEFAULTS)
+        )
         result = await store.general_operation(
             root.id,
             0,
@@ -345,7 +355,7 @@ async def test_completion_preparation_pauses_without_losing_proposal(store, monk
 
     calls = stub(monkeypatch, [complete()])
     async with http_client(store) as client:
-        run = await submit(client, policy=GeneralPolicy(resources={}))
+        run = await submit(client, policy=GeneralPolicy(resources={}, limits=LEGACY_DEFAULTS))
         proposal = await general_step({"run_id": run.id, "completion_loop": 2})
         block = {
             "resource": "model_attempts",
@@ -367,7 +377,7 @@ async def test_completion_preparation_pauses_without_losing_proposal(store, monk
 
 async def test_approval_can_resolve_during_budget_pause_and_remains_authoritative(store):
     async with http_client(store) as client:
-        run = await submit(client, ["record_set"], policy=GeneralPolicy(resources={}))
+        run = await submit(client, ["record_set"], policy=GeneralPolicy(resources={}, limits=LEGACY_DEFAULTS))
         decision = {
             "action": {
                 "kind": "invoke",
@@ -395,7 +405,9 @@ async def test_approval_can_resolve_during_budget_pause_and_remains_authoritativ
 
 async def test_unrelated_increase_and_stale_waiter_do_not_clear_current_pause(store):
     async with http_client(store) as client:
-        run = await submit(client, policy=GeneralPolicy(resources={}, limits={"model_attempts": 1}))
+        run = await submit(
+            client, policy=GeneralPolicy(resources={}, limits={**LEGACY_DEFAULTS, "model_attempts": 1})
+        )
         await charge(store, run.id)
         with pytest.raises(ResourceBlocked) as error:
             await charge(store, run.id)
@@ -430,7 +442,7 @@ async def test_completed_tool_inputs_and_results_support_completion_without_repe
 
     calls = stub(monkeypatch, respond)
     async with http_client(store) as client:
-        run = await submit(client, ["add"], policy=GeneralPolicy(resources={}))
+        run = await submit(client, ["add"], policy=GeneralPolicy(resources={}, limits=LEGACY_DEFAULTS))
         first = await general_step({"run_id": run.id, "completion_loop": 2})
         await general_action({"run_id": run.id, **first})
         second = await general_step({"run_id": run.id, "completion_loop": 2})

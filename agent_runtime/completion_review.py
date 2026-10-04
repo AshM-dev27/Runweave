@@ -181,6 +181,7 @@ async def ensure_review(store, run_id, action):
                 identity,
                 policy["max_tokens"],
                 registration.token_counter,
+                adaptive=False,
             )
             model.reject_multiple = True
             model.semantic_type = Review

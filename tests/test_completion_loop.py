@@ -201,7 +201,7 @@ async def test_actual_capacity_failure_visible_before_model_io(store, monkeypatc
 
     calls = stub(monkeypatch, [complete()])
     async with http_client(store) as client:
-        run = await submit(client, policy=GeneralPolicy(limits={"total_tokens": 1024}))
+        run = await submit(client, policy=GeneralPolicy(resources=None, limits={"total_tokens": 1024}))
         with pytest.raises(ApplicationError, match="budget_exhausted"):
             await general_step({"run_id": run.id, "completion_loop": 2})
         assert calls == []

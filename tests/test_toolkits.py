@@ -236,8 +236,8 @@ async def test_public_legacy_budget_reports_recorded_usage_not_physical_zeros(st
         assert budget["successful_usage"] == public["usage"] == usage
         for field in ("requests", "tool_calls", "reported_tokens", "reserved_tokens", "max_total_tokens"):
             assert budget[field] is None
-        assert budget["max_requests"] == agent["config"]["max_requests"]
-        assert budget["max_tool_calls"] == agent["config"]["max_tool_calls"]
+        assert budget["max_requests"] == public["config"]["max_requests"]
+        assert budget["max_tool_calls"] == public["config"]["max_tool_calls"]
         assert (await client.get("/v1/runs/missing/budget")).status_code == 404
 
 
@@ -275,10 +275,11 @@ async def test_public_v2_budget_uses_root_ledger_for_children(store):
             "tool_calls": 1,
             "reported_tokens": 120,
             "reserved_tokens": 500,
-            "max_requests": parent.config.max_requests,
-            "max_tool_calls": parent.config.max_tool_calls,
+            "max_requests": root.config.max_requests,
+            "max_tool_calls": root.config.max_tool_calls,
             "max_total_tokens": (await store.toolkit(root.id))["budget"]["max_total_tokens"],
             "successful_usage": None,
+            "adaptive": (await store.toolkit(root.id))["adaptive"],
         }
 
 

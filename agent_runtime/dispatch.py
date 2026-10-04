@@ -30,7 +30,19 @@ class Dispatcher:
                 if item is None or item.delivered:
                     continue
                 handle = self.client.get_workflow_handle(f"run:{item.run_id}")
-                if item.kind == "start":
+                if item.kind == "reconciliation":
+                    try:
+                        await self.client.start_workflow(
+                            "ReconciliationWorkflow",
+                            item.payload,
+                            id=item.id,
+                            task_queue=self.task_queue + "-v3",
+                            execution_timeout=timedelta(minutes=5),
+                            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                        )
+                    except WorkflowAlreadyStartedError:
+                        pass
+                elif item.kind == "start":
                     run = await db.get(RunRow, item.run_id)
                     feature = await db.get(ToolkitRunRow, run.id)
                     version = feature.state.get("execution_version", 1) if feature else 1
@@ -85,6 +97,7 @@ class Dispatcher:
         await self.reconcile()
         await self.reconcile_cleanup()
         await self.reconcile_general_cleanup()
+        await self.reconcile_operator_recovery()
 
     async def reconcile(self):
         # Covers workflow execution timeouts/failed workflow tasks and crashes during finalization.
@@ -147,9 +160,60 @@ class Dispatcher:
                 except RPCError:
                     children_done = False
             try:
+                run = await self.store.get(gr.run_id)
+                if run.status in TERMINAL and any(
+                    e.get("extension", {}).get("handler") == "browser_use.v4"
+                    for e in gr.data["tools"].values()
+                ):
+                    try:
+                        await self.client.start_workflow(
+                            "ExtensionCleanupWorkflow",
+                            gr.run_id,
+                            id="extension-cleanup:" + gr.run_id,
+                            task_queue=self.task_queue + "-v3",
+                            execution_timeout=timedelta(minutes=15),
+                            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                        )
+                    except WorkflowAlreadyStartedError:
+                        pass
                 await self.store.general_cleanup(gr.run_id, allow_complete=children_done)
             except Exception:
                 pass
+
+    async def reconcile_operator_recovery(self):
+        # A closed recovery workflow must not leave its target permanently locked.
+        import time
+
+        from .general_db import GeneralOperationRow
+        from .reconciliation import finish
+
+        async with self.store.database.sessions() as db:
+            pending = list(
+                await db.scalars(
+                    select(GeneralOperationRow)
+                    .where(
+                        GeneralOperationRow.data["kind"].as_string() == "reconciliation",
+                        GeneralOperationRow.data["status"].as_string() != "complete",
+                    )
+                    .limit(100)
+                )
+            )
+        for entry in pending:
+            try:
+                desc = await self.client.get_workflow_handle(entry.id).describe()
+            except RPCError:
+                continue
+            if desc.status == WorkflowExecutionStatus.RUNNING:
+                continue
+            async with self.store.database.sessions.begin() as db:
+                row, _, _ = await self.store.general_lock(db, entry.run_id, active=False)
+                op = await db.get(GeneralOperationRow, entry.id)
+                if op.data["status"] == "complete" or op.data.get("lease", 0) > time.time():
+                    continue
+                op.data = {**op.data, "owner": None}
+                await finish(
+                    self.store, db, row, op, {"outcome": "unknown", "source": "recovery_interrupted"}
+                )
 
     async def run(self):
         while True:

@@ -168,7 +168,9 @@ async def test_private_child_new_output_merge_and_allocation(pg_store, monkeypat
         )
         root_checks = (await client.verifications(run.id))["items"]
         assert root_checks and all(v["revision_id"] == result.workspace["revision_id"] for v in root_checks)
-        assert any(c["children"] and c["children"]["d0"]["allocation"] for c in calls)
+        assert any(c["children"] for c in calls)
+        assert all("allocation" not in child for c in calls for child in c["children"].values())
+        assert (await client.resources(children[0].id))["child_estimate"]["model_attempts"] == 4
         assert len(calls) == 6
         assert (await client.budget(run.id))["v3"]["counters"]["model_attempts"] == 6
         history = await temporal.get_workflow_handle("run:" + run.id).fetch_history()
@@ -265,7 +267,7 @@ async def test_private_automatic_check_faults(pg_store, monkeypatch, fault):
                         "-n",
                         "docker",
                         *args,
-                        "agent-runtime-v3-test-broker",
+                        os.environ.get("TEST_PROJECT_BROKER_NAME", "agent-runtime-v3-test-broker"),
                         stdout=asyncio.subprocess.DEVNULL,
                     )
                     assert await p.wait() == 0
@@ -365,7 +367,7 @@ async def test_final_reporting_reserve_runs_checks_without_model_request(pg_stor
                     }
                 ],
             },
-            policy=GeneralPolicy(limits={"model_attempts": 1}),
+            policy=GeneralPolicy(resources=None, limits={"model_attempts": 1}),
         )
         result = await client.wait(run.id, timeout=30)
         assert result.status == ("completed" if passes else "failed"), result.error

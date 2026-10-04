@@ -69,7 +69,8 @@ class ToolkitStore:
             raise Problem(422, "Token limit exceeds registration")
         state = {
             "execution_version": 2
-            if config.max_total_tokens is not None
+            if (config.adaptive and reg.adapter != "fake")
+            or config.max_total_tokens is not None
             or artifact_ids
             or snapshots
             or any(t not in {"add", "record_note", "convert_temperature"} for t in config.tools)
@@ -81,6 +82,8 @@ class ToolkitStore:
             "children": {},
             "evidence": [],
             "denied": False,
+            "outcome_tracking": 1,
+            "outcome_issues": {},
             "sandbox_jobs": {},
             "cleanup_state": "complete",
             "budget": {
@@ -280,14 +283,42 @@ class ToolkitStore:
             db.add(ToolkitOperationRow(id=identity, run_id=run_id, digest=fingerprint, result=None))
         return None
 
+    async def record_tool_failure(self, run_id, call_id, code):
+        """Persist only sanitized facts; retries cannot overwrite a committed success."""
+        async with self.database.sessions.begin() as db:
+            root, root_feature, row, feature = await self.tree_lock(db, run_id, active=False)
+            operation = await db.get(ToolkitOperationRow, f"{run_id}:{call_id}")
+            if (
+                root.status in {"completed", "failed", "cancelled"}
+                or row.status in {"completed", "failed", "cancelled"}
+                or (operation and operation.result is not None and code != "operation_arguments_changed")
+            ):
+                return
+            for owner in (feature,) if feature.run_id == root_feature.run_id else (feature, root_feature):
+                owner.state = {
+                    **owner.state,
+                    "outcome_issues": {**owner.state.get("outcome_issues", {}), f"{run_id}:{call_id}": code},
+                }
+            await self.emit(
+                db,
+                root,
+                f"tool-error:{run_id}:{call_id}",
+                "tool.failed",
+                {"origin_run_id": run_id, "call_id": call_id, "error": code},
+            )
+
     async def save_operation(self, run_id, call_id, result, tool="delegate"):
         from .store import Problem
 
         if len(json.dumps(result).encode()) > 16384:
             raise Problem(409, "tool_result_limit")
         async with self.database.sessions.begin() as db:
-            root, _, _, feature = await self.tree_lock(db, run_id)
+            root, root_feature, _, feature = await self.tree_lock(db, run_id)
             row = await db.get(ToolkitOperationRow, f"{run_id}:{call_id}")
+            for owner in (feature,) if feature.run_id == root_feature.run_id else (feature, root_feature):
+                issues = dict(owner.state.get("outcome_issues", {}))
+                issues.pop(f"{run_id}:{call_id}", None)
+                owner.state = {**owner.state, "outcome_issues": issues}
             if row.result is None:
                 row.result = result
                 evidence = result.get("evidence", []) if isinstance(result, dict) else []
@@ -326,6 +357,17 @@ class ToolkitStore:
             ):
                 raise Problem(422, "invalid_delegation")
             cid = str(uuid5(NAMESPACE_URL, f"{root.id}:{call_id}"))
+            from .schemas import RunCreate
+
+            selected = AgentConfig.model_validate(spec["config"])
+            child_config, child_plan = await self.size_task(
+                db,
+                selected,
+                RunCreate(
+                    agent_id=spec["agent_id"], input=task["instruction"], artifact_ids=task["artifact_ids"]
+                ),
+                await self.registration(spec["registration_id"]),
+            )
             # Legacy NOT NULL columns retained; public/session behavior is detached for child rows.
             child = RunRow(
                 id=cid,
@@ -333,7 +375,7 @@ class ToolkitStore:
                 agent_id=spec["agent_id"],
                 key="child:" + cid,
                 fingerprint=fingerprint,
-                config=spec["config"],
+                config=child_config.model_dump(),
                 input=task["instruction"],
                 registration_id=spec["registration_id"],
                 approval_wait_seconds=run.approval_wait_seconds,
@@ -352,6 +394,9 @@ class ToolkitStore:
                         "artifacts": [],
                         "evidence": [],
                         "specialist": task["specialist"],
+                        **({"adaptive": child_plan} if child_plan else {}),
+                        "outcome_tracking": 1,
+                        "outcome_issues": {},
                     },
                 )
             )
@@ -399,6 +444,7 @@ class ToolkitStore:
                 "max_tool_calls": limits["tool_attempts"],
                 "max_total_tokens": limits["total_tokens"],
                 "v3": {"counters": b, "limits": limits},
+                "adaptive": root.get("adaptive"),
             }
         root = await self.toolkit(data["root_id"])
         if root.get("execution_version", 1) == 2:
@@ -407,6 +453,7 @@ class ToolkitStore:
                 "execution_version": 2,
                 "accounting_mode": "shared_ledger",
                 "successful_usage": None,
+                "adaptive": root.get("adaptive"),
             }
         async with self.database.sessions() as db:
             row = await db.get(RunRow, run_id)
@@ -421,6 +468,7 @@ class ToolkitStore:
                 "max_tool_calls": row.config["max_tool_calls"],
                 "max_total_tokens": None,
                 "successful_usage": row.usage or {},
+                "adaptive": data.get("adaptive"),
             }
 
     async def sandbox_intent(self, run_id, operation_id):

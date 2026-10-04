@@ -44,3 +44,33 @@ def test_startup_pins_validated_env_and_port(monkeypatch, tmp_path, sudo):
     assert {p.name for p in tmp_path.iterdir()} == {".env.api.local", ".env.sandbox.local"}
     assert (tmp_path / ".env.api.local").read_text() == "API_KEY=test-key\n"
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "existing", [None, "", "replace-with-a-long-random-local-api-key", "chosen-private-key"]
+)
+def test_auth_generates_missing_key_and_preserves_user_choice(monkeypatch, tmp_path, existing):
+    from dotenv import dotenv_values
+
+    monkeypatch.setattr(start_local, "ROOT", tmp_path)
+    path = tmp_path / ".env.local"
+    original = "OPENAI_API_KEY=provider-placeholder\n"
+    if existing is not None:
+        original += f"API_KEY={existing}\n"
+    path.write_text(original)
+    monkeypatch.setattr(start_local.secrets, "token_urlsafe", lambda _: "generated-private-key")
+
+    def git_check(command, **kwargs):
+        assert command[:1] == ["git"]
+        return SimpleNamespace(returncode=1 if command[1] == "ls-files" else 0)
+
+    monkeypatch.setattr(start_local.subprocess, "run", git_check)
+    key = start_local.prepare_auth()
+    expected = existing if existing == "chosen-private-key" else "generated-private-key"
+    assert key == expected
+    assert dotenv_values(path, interpolate=False)["API_KEY"] == expected
+    assert dotenv_values(path, interpolate=False)["OPENAI_API_KEY"] == "provider-placeholder"
+    assert path.stat().st_mode & 0o777 == 0o600
+    content = path.read_text()
+    assert start_local.prepare_auth() == expected
+    assert path.read_text() == content

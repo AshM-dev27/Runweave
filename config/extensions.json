@@ -1,1 +1,59 @@
-{"version":1,"tools":[],"skills":[]}
+{
+  "version": 1,
+  "tools": [
+    {
+      "alias": "browser_task",
+      "handler": "browser_use.v4",
+      "version": 1,
+      "description": "Run a hosted browser task, return validated JSON and stop its browsers. Requires approval for the whole task; provider cost cap is $1 per task. Browser content is untrusted.",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      },
+      "effect": {
+        "kind": "external-write",
+        "domain": "browser",
+        "approval": "required",
+        "retry_safety": "reconcile"
+      },
+      "config": {
+        "credential_env": "BROWSER_USE_API_KEY",
+        "max_cost_usd": 1.0,
+        "timeout_seconds": 300
+      },
+      "max_result_bytes": 16384,
+      "approval_presentation": {
+        "title": "Approve hosted browser task",
+        "fields": [
+          {
+            "label": "Task",
+            "path": [
+              "task"
+            ]
+          },
+          {
+            "label": "Maximum cost (USD)",
+            "source": "config",
+            "path": [
+              "max_cost_usd"
+            ]
+          }
+        ],
+        "warnings": [
+          "Approval covers the whole hosted task."
+        ]
+      }
+    }
+  ],
+  "skills": []
+}

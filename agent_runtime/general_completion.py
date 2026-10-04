@@ -28,6 +28,7 @@ async def prepare_completion(data):
         if model is None or not model.data.get("semantic_result"):
             fail("completion_binding_missing", 409)
         binding = model.data["binding"]
+        batch = model.data["result"]["action"].get("arguments", {}).get("check_id") == "$pending"
         modern = binding["version"] >= 2
         from .general_receipts import current_checks
 
@@ -62,6 +63,8 @@ async def prepare_completion(data):
                 status="checking",
             )
             model.data = {**model.data, "completion_phase": phase}
+        if phase["status"] == "verified":
+            return {"verification_done": True, "final": True}
         index = phase["index"]
         # Only a checkpoint from this exact persisted phase advances the binding.
         while index < len(phase["checks"]):
@@ -116,6 +119,30 @@ async def prepare_completion(data):
         if index < len(phase["checks"]) and not phase.get("error"):
             decision = check_decision(phase, index)
             final = False
+        elif batch:
+            receipts = await current_checks(store, db, gr)
+            outcomes = {
+                spec["id"]: receipts.get((c["id"], spec["id"]), {}).get("outcome", "pending")
+                for c in gr.data["goal"]["criteria"]
+                for spec in c["checks"]
+            }
+            await store.general_checkpoint(
+                db,
+                row,
+                gr,
+                model.id + ":verified",
+                {
+                    "action": {"kind": "verify", "check": "all"},
+                    "status": "complete",
+                    "checks": outcomes,
+                    "outcome": "pass" if all(v == "pass" for v in outcomes.values()) else "fail",
+                    "verification_ids": phase["evidence"],
+                },
+                progress=True,
+            )
+            phase["status"] = "verified"
+            model.data = {**model.data, "completion_phase": phase}
+            return {"verification_done": True, "final": True}
         else:
             decision = copy.deepcopy(model.data["result"])
             assessment = decision["action"]["assessment"]

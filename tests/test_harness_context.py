@@ -107,7 +107,7 @@ def test_legacy_registration_hash_survives_new_counter_field():
     legacy = (
         load_registry()
         .entries[("fake", "deterministic")]
-        .model_dump(exclude={"token_counter", "reasoning_effort"})
+        .model_dump(exclude={"token_counter", "reasoning_effort", "context_bytes_limit"})
     )
     expected = hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     restored = Registration.model_validate(legacy)

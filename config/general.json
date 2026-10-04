@@ -11,5 +11,12 @@
     "command_attempts": 512,
     "total_tokens": 1000000,
     "active_seconds": 86400
+  },
+  "adaptive_ceilings": {
+    "model_attempts": 64,
+    "tool_attempts": 256,
+    "command_attempts": 64,
+    "total_tokens": 128000,
+    "active_seconds": 1800
   }
 }

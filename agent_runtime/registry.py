@@ -25,6 +25,8 @@ class Registration(BaseModel):
     max_output_tokens: int = Field(ge=128, le=1000000)
     total_tokens_limit: int = Field(ge=128, le=1000000)
 
+    context_bytes_limit: int = Field(default=24576, ge=24576, le=1048576)
+
     token_counter: Literal["utf8-v1", "o200k-v1"] = "utf8-v1"
 
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
@@ -64,6 +66,8 @@ class Registration(BaseModel):
     def identity(self):
         data = self.model_dump()
         # Preserve identities of retained registrations created before this optional field.
+        if self.context_bytes_limit == 24576:
+            data.pop("context_bytes_limit")
         if self.token_counter == "utf8-v1":
             data.pop("token_counter")
         if self.reasoning_effort is None:
@@ -93,7 +97,7 @@ class Registry:
             raise ValueError("Unsupported provider/model combination")
         if not registration.tool_calling:
             raise ValueError("Model does not support required tool calling")
-        if config.max_tokens > registration.max_output_tokens:
+        if config.max_tokens is not None and config.max_tokens > registration.max_output_tokens:
             raise ValueError("Requested output tokens exceed registration limit")
         return registration
 

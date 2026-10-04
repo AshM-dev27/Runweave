@@ -6,14 +6,15 @@ No request can import code, choose an endpoint, or enlarge an execution grant.
 import importlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Awaitable, Callable, Literal, Protocol
 from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 from pydantic import Field, model_validator
 
+from .approval_preview import ApprovalPresentation
 from .general_contracts import Contract, EffectPolicy
 from .project_store import digest
 
@@ -27,6 +28,8 @@ class ToolDefinition(Contract):
     effect: EffectPolicy
     config: dict = Field(default_factory=dict)
     max_result_bytes: int = Field(default=16384, ge=256, le=32768)
+    reconciliation: Literal["retry", "lookup"] = "retry"
+    approval_presentation: ApprovalPresentation | None = None
 
     @model_validator(mode="after")
     def valid(self):
@@ -91,11 +94,19 @@ class MCPConfig(Contract):
 
 
 @dataclass(frozen=True)
+class DeferredToolResult:
+    retry_after: int = 2
+
+
+@dataclass(frozen=True)
 class ToolCall:
     run_id: str
     operation_id: str
     arguments: dict
     definition: dict
+    state: dict = field(default_factory=dict)
+    remaining_seconds: float | None = None
+    save_state: Callable[[dict], Awaitable[None]] | None = None
 
     @property
     def idempotency_key(self):
@@ -186,13 +197,27 @@ class ExtensionRegistry:
 
         if any(t.alias in CATALOG for t in manifest.tools):
             raise ValueError("Extensions cannot replace built-in capabilities")
-        self.handlers = {"mcp.http": MCPHandler(), **(handlers or {})}
+        from .browser_use import ARGUMENTS_SCHEMA, BrowserUseConfig, BrowserUseHandler
+
+        self.handlers = {"mcp.http": MCPHandler(), "browser_use.v4": BrowserUseHandler(), **(handlers or {})}
         self.tools, self.skills = {}, {}
         for definition in manifest.tools:
             if definition.alias in self.tools:
                 raise ValueError("Duplicate extension alias")
             no_inline_secrets(definition.config)
+            if definition.handler == "browser_use.v4":
+                BrowserUseConfig.model_validate(definition.config)
+                if (
+                    definition.effect.kind != "external-write"
+                    or definition.arguments_schema != ARGUMENTS_SCHEMA
+                    or definition.config.get("credential_env") != "BROWSER_USE_API_KEY"
+                ):
+                    raise ValueError(
+                        "Browser Use requires approved writes, the fixed task schema and credential reference"
+                    )
             if definition.handler == "mcp.http":
+                if definition.reconciliation == "lookup":
+                    raise ValueError("Terminal MCP recovery requires a custom lookup-only handler")
                 config = MCPConfig.model_validate(definition.config)
                 if definition.effect.kind == "external-write" and not config.idempotency_argument:
                     raise ValueError("MCP writes require upstream idempotency")

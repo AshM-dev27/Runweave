@@ -21,8 +21,9 @@
     "credential_env": "OPENAI_API_KEY",
     "tool_calling": true,
     "max_output_tokens": 4096,
-    "total_tokens_limit": 16000,
-    "token_counter": "o200k-v1"
+    "total_tokens_limit": 128000,
+    "token_counter": "o200k-v1",
+    "context_bytes_limit": 65536
   },
   {
     "provider": "openai",
@@ -35,8 +36,9 @@
     "credential_env": "OPENAI_API_KEY",
     "tool_calling": true,
     "max_output_tokens": 4096,
-    "total_tokens_limit": 16000,
-    "token_counter": "o200k-v1"
+    "total_tokens_limit": 128000,
+    "token_counter": "o200k-v1",
+    "context_bytes_limit": 65536
   },
   {
     "provider": "anthropic",
@@ -48,6 +50,7 @@
     "credential_env": "ANTHROPIC_API_KEY",
     "tool_calling": true,
     "max_output_tokens": 4096,
-    "total_tokens_limit": 16000
+    "total_tokens_limit": 128000,
+    "context_bytes_limit": 65536
   }
 ]

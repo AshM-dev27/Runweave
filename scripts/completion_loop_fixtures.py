@@ -26,10 +26,12 @@ def fixture(name):
 
 def config(name):
     f = fixture(name)
-    policy = GeneralPolicy(limits={"model_attempts": MANIFEST["scenario_limits"][name]})
+    policy = GeneralPolicy(resources=None, limits={"model_attempts": MANIFEST["scenario_limits"][name]})
     if name == "parallel":
         policy = GeneralPolicy(
-            limits={"model_attempts": 24}, delegation={"tools": f["tools"], "limits": {"model_attempts": 4}}
+            resources=None,
+            limits={"model_attempts": 24},
+            delegation={"tools": f["tools"], "limits": {"model_attempts": 4}},
         )
     return AgentConfig(
         name=name,

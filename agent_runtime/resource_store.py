@@ -62,6 +62,7 @@ class ResourceStore:
             if not gr.parent_id:
                 for kind in update.limits:
                     state["sources"][kind] = "authorized_update"
+                    state.setdefault("task_limits", {})[kind] = update.limits[kind]
             root.data = data
             # Wake every run; child permissions and original model registrations stay pinned.
             for rid in [root.run_id, *root.data["children"]]:

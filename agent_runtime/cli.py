@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -45,6 +46,23 @@ def parser():
     a.add_argument("--model", default="deterministic")
     a.add_argument("--tools", nargs="+", default=["add"])
     a.add_argument("--max-tokens", type=int, default=512)
+    task = sub.add_parser("run", help="Send a task and wait for a result or a decision")
+    task.add_argument("id", help="Reusable agent ID")
+    task.add_argument("input")
+    task.add_argument(
+        "--file", action="append", default=[], help="Explicit local input file; repeat for multiple files"
+    )
+    task.add_argument("--key", help="Reuse this key and identical input when recovering a submission")
+    task.add_argument("--task", help="Optional TaskGoal JSON file")
+    task.add_argument("--session", help="Continue an existing conversation")
+    task.add_argument(
+        "--timeout", type=float, default=150, help="Seconds to wait; expiry does not cancel the task"
+    )
+    task.add_argument("--json", action="store_true", help="Print the compact outcome as JSON")
+    result = sub.add_parser("result", help="Resume waiting for an existing task")
+    result.add_argument("id", help="Run ID")
+    result.add_argument("--timeout", type=float, default=150)
+    result.add_argument("--json", action="store_true")
     for name in ["submit", "continue"]:
         s = sub.add_parser(name)
         s.add_argument("id", help="Agent ID for submit; previous run ID for continue")
@@ -64,6 +82,10 @@ def parser():
         "deny",
         "children",
         "budget",
+        "resources",
+        "recovery",
+        "reconcile",
+        "reconciliation",
         "effects",
         "task",
         "verifications",
@@ -73,6 +95,11 @@ def parser():
     ]:
         s = sub.add_parser(name)
         s.add_argument("id", help="Run ID")
+        if name == "reconcile":
+            s.add_argument("request", help="ReconciliationRequest JSON file")
+            s.add_argument("--key", required=True)
+        if name == "reconciliation":
+            s.add_argument("operation", help="Reconciliation ID")
         if name in {"approve", "deny"}:
             s.add_argument("approval_id")
         if name == "watch":
@@ -82,6 +109,13 @@ def parser():
             s.add_argument("--limit", type=int, default=16)
         if name == "capabilities":
             s.add_argument("--query", default="")
+    evidence = sub.add_parser("evidence", help="Export a completed run's acceptance evidence")
+    evidence.add_argument("id", help="Run ID")
+    evidence.add_argument("--output", help="Save to a new file instead of stdout")
+    verify = sub.add_parser(
+        "verify-evidence", help="Verify an evidence file offline; never executes commands"
+    )
+    verify.add_argument("path")
     wc = sub.add_parser("workspace-create")
     wc.add_argument("--directory")
     wc.add_argument("--key")
@@ -136,14 +170,85 @@ def display(value):
 
 
 async def run(args):
+    if args.command == "verify-evidence":
+        from .evidence import MAX_BUNDLE_BYTES, load_evidence_bundle, verify_evidence_bundle
+
+        try:
+            with open(args.path, "rb") as file:
+                bundle = load_evidence_bundle(file.read(MAX_BUNDLE_BYTES + 1))
+        except (OSError, ValueError):
+            raise ClientError("Invalid or unreadable evidence file.") from None
+        result = verify_evidence_bundle(bundle)
+        display(result)
+        return 0 if result.valid else 1
     if not os.environ.get("API_KEY"):
         raise ClientError(
             "API_KEY is missing. Use uv run --env-file .env.local python -m agent_runtime.cli …"
         )
     async with Client(args.base_url, os.environ["API_KEY"]) as client:
         cmd = args.command
+        if cmd in {"run", "result"}:
+
+            def progress(event):
+                if not args.json:
+                    suffix = f" Run: {event.run_id}" if event.stage == "submitted" else ""
+                    print(event.message + suffix, file=sys.stderr, flush=True)
+
+            if cmd == "run":
+                key = args.key or uuid4().hex
+                print(f"Retry key: {key}", file=sys.stderr, flush=True)
+                result = await client.run(
+                    args.id,
+                    args.input,
+                    files=args.file,
+                    session_id=args.session,
+                    task=json.loads(Path(args.task).read_text()) if args.task else None,
+                    idempotency_key=key,
+                    timeout=args.timeout,
+                    on_progress=progress,
+                )
+            else:
+                result = await client.result(args.id, timeout=args.timeout, on_progress=progress)
+            if args.json:
+                display(result)
+            else:
+                print(f"Outcome: {result.outcome}")
+                if result.outcome != "succeeded" or result.answer is None:
+                    print(result.message)
+                if result.answer is not None:
+                    print(result.answer)
+                print(f"Run: {result.run_id}")
+                for artifact in result.files:
+                    print(f"File: {artifact.filename} (artifact {artifact.id})")
+                if result.workspace:
+                    print(
+                        f"Workspace: {result.workspace['workspace_id']} (revision {result.workspace['revision_id']})"
+                    )
+                for approval in result.approvals:
+                    if approval.preview:
+                        print(f"Approval {approval.id}: {approval.preview.title}")
+                        for fact in approval.preview.facts:
+                            print(f"  {fact.label}: {fact.value}")
+                        for warning in approval.preview.warnings:
+                            print(f"  {warning}")
+                    else:
+                        print(f"Approval {approval.id}: {approval.tool} {json.dumps(approval.arguments)}")
+                if result.next_action:
+                    print(result.next_action)
+            if result.outcome in {"blocked", "needs_attention"}:
+                return 2
+            return 0 if result.outcome == "succeeded" else 1
         if cmd in {"models", "readiness", "tools", "artifacts"}:
             result = await getattr(client, cmd)()
+        elif cmd == "evidence":
+            result = await client.evidence(args.id)
+            if args.output:
+                try:
+                    with open(args.output, "x", encoding="utf-8") as output:
+                        output.write(result.model_dump_json() + "\n")
+                except OSError:
+                    raise ClientError("Cannot create evidence file; use a new writable path.") from None
+                result = {"path": args.output, "sha256": result.sha256}
         elif cmd == "catalog":
             result = await client.installed_capabilities()
         elif cmd == "skills":
@@ -206,6 +311,12 @@ async def run(args):
             display(result)
             if args.wait:
                 result = await client.wait(result.id)
+        elif cmd == "reconcile":
+            result = await client.reconcile(
+                args.id, json.loads(Path(args.request).read_text()), idempotency_key=args.key
+            )
+        elif cmd == "reconciliation":
+            result = await client.reconciliation(args.id, args.operation)
         elif cmd in {"approve", "deny"}:
             result = await client.decide(args.id, args.approval_id, cmd == "approve")
         elif cmd == "watch":
@@ -225,6 +336,8 @@ async def run(args):
                 print(f"Decision recorded. Use get/wait {result.id} to follow workflow progress.")
             elif result.status == "awaiting_approval":
                 print("Approval required: review approvals and run approve/deny RUN_ID APPROVAL_ID.")
+            if result.outcome in {"blocked", "needs_attention"}:
+                return 2
             return 1 if result.status in {"failed", "cancelled"} else 0
         return 1 if cmd == "readiness" and not result["ready"] else 0
 

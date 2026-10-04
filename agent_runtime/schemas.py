@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .approval_preview import ApprovalPreview
+
 # Owned public v3 DTO exports; framework-specific model messages stay private.
 from .general_contracts import CapabilityDescriptor as CapabilityDescriptor
 from .general_contracts import CheckSpec as CheckSpec
@@ -15,6 +17,7 @@ from .general_contracts import GeneralLimits as GeneralLimits
 from .general_contracts import ProjectManifest as ProjectManifest
 from .general_contracts import TaskSnapshot as TaskSnapshot
 from .general_contracts import VerificationResult as VerificationResult
+from .task_outcomes import OutcomeReason, TaskOutcome
 from .tool_contracts import ArtifactRef, SubagentSpec, TaskResult
 
 
@@ -32,7 +35,11 @@ class AgentConfig(Contract):
     subagents: list[SubagentSpec] = Field(default_factory=list, max_length=2)
     max_children: int = Field(default=2, ge=0, le=2)
     delegation_mode: Literal["parallel_read", "sequential"] = "parallel_read"
-    max_total_tokens: int | None = Field(default=None, ge=1024, le=16000)
+    adaptive: bool = Field(
+        default=True,
+        description="Size each new task from its inputs and adapt output/context within pinned limits.",
+    )
+    max_total_tokens: int | None = Field(default=None, ge=1024, le=1000000)
 
     @model_validator(mode="after")
     def unique_tools(self):
@@ -54,10 +61,15 @@ class AgentConfig(Contract):
             raise ValueError("Delegation requires specialists and delegate tool")
         return self
 
-    max_requests: int = Field(default=6, ge=1, le=12)
-    max_tool_calls: int = Field(default=6, ge=1, le=12)
-    max_tokens: int = Field(default=1024, ge=128, le=4096)
-    timeout_seconds: int = Field(default=120, ge=5, le=600)
+    max_requests: int | None = Field(default=None, ge=1, le=128)
+    max_tool_calls: int | None = Field(default=None, ge=1, le=512)
+    max_tokens: int | None = Field(
+        default=None,
+        ge=128,
+        le=65536,
+        description="Hard per-response output cap; null lets adaptive sizing use the registered model ceiling.",
+    )
+    timeout_seconds: int | None = Field(default=None, ge=5, le=3600)
 
 
 class Agent(Contract):
@@ -90,6 +102,7 @@ Status = Literal[
 
 
 class Approval(Contract):
+    preview: ApprovalPreview | None = None
     id: str
     tool: str
     arguments: dict[str, Any]
@@ -102,6 +115,10 @@ class Run(Contract):
     agent_id: str
     config: AgentConfig
     status: Status
+    outcome: TaskOutcome | None = Field(
+        default=None, description="Task result, separate from workflow lifecycle status."
+    )
+    outcome_reason: OutcomeReason | None = None
     output: Answer | None = None
     error: str | None = None
     approvals: list[Approval] = Field(default_factory=list)

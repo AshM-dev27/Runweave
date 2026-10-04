@@ -47,13 +47,34 @@ async def fake(messages, info):
 
 
 class AccountedModel(WrapperModel):
-    def __init__(self, model, run_id, output_limit):
+    def __init__(self, model, run_id, output_limit, token_counter="utf8-v1"):
         super().__init__(model)
         self.run_id, self.output_limit = run_id, output_limit
+        self.token_counter = token_counter
 
     async def request(self, messages, model_settings, model_request_parameters):
         encoded = ModelMessagesTypeAdapter.dump_json(messages)
-        if len(encoded) > 32000:
+        plan = await get_store().adaptive_settings(self.run_id, context_bytes=len(encoded))
+        self.context_limit = plan["context_bytes"] if plan else 32000
+        self.adaptive = bool(plan)
+        if plan:
+            self.output_limit = plan["output_tokens"]
+            model_settings = {**(model_settings or {}), "max_tokens": self.output_limit}
+        response = await self._request_once(messages, model_settings, model_request_parameters)
+        if plan:
+            truncated = response.finish_reason == "length"
+            updated = await get_store().adaptive_settings(
+                self.run_id, output_tokens=response.usage.output_tokens, truncated=truncated
+            )
+            if truncated:
+                if updated["output_tokens"] > self.output_limit:
+                    return await self.request(messages, model_settings, model_request_parameters)
+                raise ValueError("output_limit")
+        return response
+
+    async def _request_once(self, messages, model_settings, model_request_parameters):
+        encoded = ModelMessagesTypeAdapter.dump_json(messages)
+        if len(encoded) > self.context_limit:
             raise ValueError("context_limit")
         # Byte count is conservative for UTF-8 tokenization; include complete tool/instruction overhead.
         # Count text/schema bytes actually supplied, excluding provider timestamps/usage/IDs
@@ -83,6 +104,14 @@ class AccountedModel(WrapperModel):
             + 256
             + 64 * len(messages)
         )
+        if self.adaptive and self.token_counter != "utf8-v1":
+            from .context import reserve_tokens
+
+            tokens = reserve_tokens(
+                json.dumps([parts, definitions], ensure_ascii=False).encode(),
+                self.output_limit,
+                self.token_counter,
+            )
         await get_store().reserve_usage(self.run_id, "requests", tokens)
         feature = await get_store().toolkit(self.run_id)
         root = await get_store().get(feature["root_id"])
@@ -123,7 +152,7 @@ async def toolkit_step(data: dict):
                 {n: s["description"] for n, s in feature["specialists"].items()}
             )
         agent = Agent(
-            AccountedModel(model, run["id"], config["max_tokens"]),
+            AccountedModel(model, run["id"], config["max_tokens"], registration.token_counter),
             tools=tools,
             output_type=Answer | DeferredToolRequests,
             retries=1,
@@ -140,7 +169,9 @@ async def toolkit_step(data: dict):
                 model_settings={"max_tokens": config["max_tokens"], "timeout": 30},
             )
         serialized = ModelMessagesTypeAdapter.dump_python(result.all_messages(), mode="json")
-        if len(json.dumps(serialized).encode()) > 48000:
+        if len(json.dumps(serialized).encode()) > (
+            feature.get("adaptive", {}).get("max_context_bytes", 32000) * 3 // 2
+        ):
             raise ValueError("context_limit")
         if isinstance(result.output, DeferredToolRequests):
             return {
@@ -156,8 +187,8 @@ async def toolkit_step(data: dict):
         code = getattr(exc, "detail", "")
         if code not in {"budget_exhausted", "run_terminal"}:
             code = (
-                "context_limit"
-                if isinstance(exc, ValueError) and str(exc) == "context_limit"
+                str(exc)
+                if isinstance(exc, ValueError) and str(exc) in {"context_limit", "output_limit"}
                 else "model_execution_failed"
             )
         raise ApplicationError(code, non_retryable=code != "model_execution_failed") from None
@@ -184,6 +215,7 @@ async def toolkit_tool(data: dict):
             "budget_exhausted",
             "run_terminal",
             "artifact_not_authorized",
+            "operation_arguments_changed",
             "sandbox_unavailable",
             "sandbox_timeout",
             "sandbox_execution_failed",
@@ -193,7 +225,9 @@ async def toolkit_tool(data: dict):
         }
         if not code and isinstance(exc, ValueError) and str(exc) in allowed:
             code = str(exc)
-        return {"error": code if code in allowed else "tool_execution_failed"}
+        code = code if code in allowed else "tool_execution_failed"
+        await get_store().record_tool_failure(data["run_id"], data["id"], code)
+        return {"error": code}
 
 
 @activity.defn

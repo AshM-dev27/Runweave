@@ -18,6 +18,7 @@ from .general_contracts import Criterion, PlanStep, StepDecision
 from .general_db import GeneralAttemptRow, GeneralOperationRow
 from .model_adapter import build_model, request_context
 from .project_store import digest, fail
+from .reconciliation import reconcile_operation
 from .resources import ResourceBlocked, check, not_dispatched, reserve_for, settle_model_attempt
 from .resources import policy as resource_policy
 from .runtime import get_store
@@ -32,14 +33,48 @@ class DecisionEnvelope(BaseModel):
 
 
 class GeneralModel(WrapperModel):
-    def __init__(self, model, run_id, op_id, output, token_counter="utf8-v1"):
+    def __init__(self, model, run_id, op_id, output, token_counter="utf8-v1", *, adaptive=True):
         super().__init__(model)
         self.run_id, self.op_id, self.output = run_id, op_id, output
         self.token_counter = token_counter
+        self.adaptive = adaptive
         self.reject_multiple = False
         self.semantic_type = None
 
     async def request(self, messages, model_settings, model_request_parameters):
+        encoded = ModelMessagesTypeAdapter.dump_json(messages)
+        plan = (
+            await get_store().adaptive_settings(
+                self.run_id,
+                context_bytes=len(encoded)
+                + len(
+                    json.dumps(
+                        [t.parameters_json_schema for t in model_request_parameters.output_tools],
+                        separators=(",", ":"),
+                    ).encode()
+                ),
+            )
+            if self.adaptive
+            else None
+        )
+        self.has_adaptive_plan = bool(plan)
+        self.context_limit = plan["context_bytes"] if plan else 24576
+        if plan:
+            self.output = plan["output_tokens"]
+            model_settings = {**(model_settings or {}), "max_tokens": self.output}
+        response = await self._request_once(messages, model_settings, model_request_parameters)
+        if plan:
+            truncated = response.finish_reason == "length"
+            updated = await get_store().adaptive_settings(
+                self.run_id, output_tokens=response.usage.output_tokens, truncated=truncated
+            )
+            if truncated:
+                if updated["output_tokens"] > self.output:
+                    return await self.request(messages, model_settings, model_request_parameters)
+                fail("output_limit", 409)
+        return response
+
+    async def _request_once(self, messages, model_settings, model_request_parameters):
         if self.reject_multiple:
             from dataclasses import replace
 
@@ -71,7 +106,7 @@ class GeneralModel(WrapperModel):
                 "output_reservation": self.output,
                 "required_reservation": context_bytes + self.output + 512,
             }
-        if context_bytes > 24576:
+        if context_bytes > self.context_limit:
             fail("context_limit", 409)
         from .context import reserve_tokens
 
@@ -176,6 +211,9 @@ class GeneralModel(WrapperModel):
         finally:
             request_context.reset(context)
         await settle_model_attempt(store, self.run_id, attempt_id, tokens=response.usage.total_tokens)
+        # A partial response is charged, but cannot become an executable proposal.
+        if self.has_adaptive_plan and response.finish_reason == "length":
+            return response
 
         # Retain only schema-known field names and types, never arbitrary provider keys.
         known_fields = set()
@@ -316,6 +354,7 @@ def fake_decision(prompt, state, verifications):
 async def general_step(run_id: str | dict):
     semantic = isinstance(run_id, dict)
     loop_version = run_id.get("completion_loop", 1) if semantic else 1
+    batch_checks = run_id.get("batch_checks", False) if semantic else False
     if semantic:
         run_id = run_id["run_id"]
     store = get_store()
@@ -395,7 +434,12 @@ async def general_step(run_id: str | dict):
                 from .general_semantic import capture
 
                 binding = await capture(
-                    store, db, gr, root, op_id, version=3 if loop_version >= 2 else loop_version
+                    store,
+                    db,
+                    gr,
+                    root,
+                    op_id,
+                    version=4 if batch_checks else 3 if loop_version >= 2 else loop_version,
                 )
                 old.data = {**old.data, "binding": binding}
             binding = old.data.get("binding")
@@ -435,11 +479,12 @@ async def general_step(run_id: str | dict):
                 )
             decision = fake_decision(prompt, state, verifications)
         elif semantic:
+            from .general_progress import INSTRUCTIONS as progress_instructions
             from .general_semantic import compile_decision, instructions, project_context, wire_type
 
-            context = context_policy.compact(
-                project_context(binding, prompt, previous_turns, report_only), 14000
-            )
+            projected = project_context(binding, prompt, previous_turns, report_only)
+            context_limit = max(16000, state.get("adaptive", {}).get("max_context_bytes", 24576) - 8192)
+            context = context_policy.compact(projected, context_limit - 2000)
             async with store.database.sessions.begin() as db:
                 op = await db.get(GeneralOperationRow, op_id)
                 if "semantic_context" not in op.data:
@@ -447,7 +492,7 @@ async def general_step(run_id: str | dict):
                 context = op.data["semantic_context"]
             report_only = context["report_only"]
             encoded = json.dumps(context, separators=(",", ":"), ensure_ascii=False)
-            if len(encoded.encode()) > 16000:
+            if len(encoded.encode()) > context_limit:
                 fail("context_limit", 409)
             model = GeneralModel(
                 build_model(registration), run_id, op_id, config["max_tokens"], registration.token_counter
@@ -467,7 +512,11 @@ async def general_step(run_id: str | dict):
                     else model.semantic_type
                 ),
                 retries=0,
-                instructions=config["instructions"] + instructions(binding["version"]),
+                instructions=config["instructions"]
+                + instructions(binding["version"])
+                + (
+                    progress_instructions if binding.get("execution_progress", {}).get("version") == 1 else ""
+                ),
             )
             async with agent:
                 result = await agent.run(
@@ -504,7 +553,9 @@ async def general_step(run_id: str | dict):
                 "delegation": state["policy"].get("delegation"),
             }
             encoded = json.dumps(context, separators=(",", ":"), ensure_ascii=False)
-            if len(encoded.encode()) > 16000:
+            if len(encoded.encode()) > max(
+                16000, state.get("adaptive", {}).get("max_context_bytes", 24576) - 8192
+            ):
                 fail("context_limit", 409)
             model = GeneralModel(
                 build_model(registration), run_id, op_id, config["max_tokens"], registration.token_counter
@@ -522,7 +573,6 @@ async def general_step(run_id: str | dict):
                     model_settings={
                         "max_tokens": config["max_tokens"],
                         "timeout": 30,
-                        **({"parallel_tool_calls": False} if binding["version"] >= 3 else {}),
                     },
                 )
             try:
@@ -602,6 +652,13 @@ async def general_step(run_id: str | dict):
 
 @activity.defn
 async def general_action(data: dict):
+    from .activity_liveness import heartbeat
+
+    async with heartbeat():
+        return await execute_general_action(data)
+
+
+async def execute_general_action(data: dict):
     store = get_store()
     try:
         if data["decision"]["action"]["kind"] == "complete":
@@ -620,7 +677,7 @@ async def general_action(data: dict):
         code = getattr(exc, "detail", "action_failed")
         if isinstance(exc, ResourceBlocked):
             raise ApplicationError(code, exc.snapshot, non_retryable=True) from None
-        if code == "model_not_dispatched":
+        if code in {"model_not_dispatched", "extension_lease_fenced"}:
             raise ApplicationError(code, non_retryable=True) from None
         if code in {"extension_lease_pending", "review_lease_pending", "extension_reconcile_pending"}:
             raise ApplicationError(code) from None
@@ -723,7 +780,34 @@ async def general_resource_pause(data: dict):
     return await get_store().resource_pause(data["run_id"], data["block"])
 
 
+@activity.defn
+async def cleanup_browser_extensions(run_id: str):
+    from sqlalchemy import select
+
+    from .extension_runtime import cleanup_extension
+
+    store = get_store()
+    async with store.database.sessions() as db:
+        operations = list(
+            await db.scalars(select(GeneralOperationRow).where(GeneralOperationRow.run_id == run_id))
+        )
+    state = await store.general(run_id)
+    pending = False
+    for op in operations:
+        alias = op.data.get("decision", {}).get("action", {}).get("capability")
+        definition = state["tools"].get(alias, {}).get("extension", {})
+        if (
+            op.data.get("external")
+            and definition.get("handler") == "browser_use.v4"
+            and op.data.get("result") is None
+        ):
+            pending |= not await cleanup_extension(store, run_id, op.id, provider_io=True)
+    return not pending
+
+
 GENERAL_ACTIVITIES = [
+    cleanup_browser_extensions,
+    reconcile_operation,
     general_resource_pause,
     general_step,
     general_action,

@@ -5,6 +5,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TEST_PROJECT_BROKER_NAME: runweave-test-sandbox-broker
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -15,10 +18,16 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -q
-      - run: docker compose up -d --build postgres temporal mcp
-      - name: Wait for local services
+      - name: Build isolated execution images
+        run: |
+          docker compose -f compose.test.yaml build sandbox-image
+          uv run python -m scripts.prepare_project_image --update-policy --tag runweave-test-project:local
+      - name: Start disposable test services
+        run: docker compose -f compose.test.yaml up -d --build --wait postgres temporal mcp sandbox-broker
+      - name: Wait for PostgreSQL, Temporal and MCP
         run: uv run python -m scripts.wait_services
       - run: uv run alembic upgrade head
-      - run: uv run pytest -q --integration
+      - name: Run service and recovery tests with fake models
+        run: uv run pytest -q --integration -m integration
       - if: always()
-        run: docker compose down -v
+        run: docker compose -f compose.test.yaml down -v --remove-orphans

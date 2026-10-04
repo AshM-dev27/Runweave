@@ -325,6 +325,7 @@ async def test_child_allocations_preserve_shared_reserves(store, monkeypatch):
     async with http_client(store) as client:
         workspace = await client.workspace_create({})
         policy = GeneralPolicy(
+            resources=None,
             delegation={"tools": ["workspace_write", "workspace_verify"]},
             limits={"model_attempts": 6, "tool_attempts": 8, "command_attempts": 6},
         )

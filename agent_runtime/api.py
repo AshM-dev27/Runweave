@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import settings
 from .db import Database
@@ -27,7 +28,16 @@ def create_app(store: Store | None = None, api_key: str | None = None):
         if owned:
             await store.database.close()
 
-    async def authenticate(authorization: Annotated[str | None, Header()] = None):
+    bearer = HTTPBearer(
+        scheme_name="RunweaveAPIKey",
+        auto_error=False,
+        description="Enter the application API_KEY. Provider credentials stay on the worker.",
+    )
+
+    async def authenticate(
+        request: Request, credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+    ):
+        authorization = request.headers.get("authorization")
         supplied = (authorization or "").removeprefix("Bearer ")
         if (
             not expected
@@ -38,11 +48,14 @@ def create_app(store: Store | None = None, api_key: str | None = None):
             raise Problem(401, "Invalid API key")
 
     app = FastAPI(
-        title="Independent Agents API",
+        title="Runweave API",
         description=(
-            "Turn user tasks, instructions, configuration and context into iterative planning, "
-            "authorized tool use, optional scoped subagents, verification and results through an owned API. "
-            "Development build; general reliability and production readiness are not established."
+            "Configure an agent once, then give it a task and receive the result. "
+            "Use **Authorize** with your application API key. Start with **Setup → Configure an agent once**, "
+            "then **Tasks → Run a task**. The Python client also provides `await client.run(...)` "
+            "for uploads, submission and waiting in one call. "
+            "Approvals and resource increases remain explicit. Files, controls and inspection are available when needed. "
+            "This is a single-workspace development build; general production reliability is not established."
         ),
         version="1.0.0",
         lifespan=lifespan,
@@ -283,11 +296,13 @@ def create_app(store: Store | None = None, api_key: str | None = None):
 
     @app.post("/v1/runs/{run_id}/cancel", response_model=Run)
     async def cancel_run(run_id: str):
-        return await store.cancel(run_id)
+        cancelled = await store.cancel(run_id)
+        return await store.get(cancelled.id)
 
     @app.post("/v1/runs/{run_id}/approvals/{approval_id}", response_model=Run)
     async def decide(run_id: str, approval_id: str, decision: Decision):
-        return await store.decide(run_id, approval_id, decision.approved)
+        decided = await store.decide(run_id, approval_id, decision.approved)
+        return await store.get(decided.id)
 
     @app.get("/v1/runs/{run_id}/events")
     async def stream(
@@ -329,6 +344,9 @@ def create_app(store: Store | None = None, api_key: str | None = None):
     from .general_api import routes
 
     routes(app, store)
+    from .api_docs import configure_docs
+
+    configure_docs(app)
     return app
 
 

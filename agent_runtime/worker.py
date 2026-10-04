@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta
 
 from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from temporalio.client import Client
@@ -8,7 +9,7 @@ from .activities import ACTIVITIES
 from .config import settings
 from .dispatch import Dispatcher
 from .general_runtime import GENERAL_ACTIVITIES
-from .general_workflow import GeneralWorkflow
+from .general_workflow import ExtensionCleanupWorkflow, GeneralWorkflow, ReconciliationWorkflow
 from .runtime import get_store
 from .telemetry import configure, configure_logging
 from .toolkit_runtime import toolkit_child, toolkit_state, toolkit_step, toolkit_tool
@@ -48,7 +49,8 @@ async def main():
             Worker(
                 client,
                 task_queue=config.task_queue + "-v3",
-                workflows=[GeneralWorkflow],
+                max_heartbeat_throttle_interval=timedelta(seconds=2),
+                workflows=[GeneralWorkflow, ReconciliationWorkflow, ExtensionCleanupWorkflow],
                 activities=GENERAL_ACTIVITIES,
             ),
         ):

@@ -4,17 +4,19 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .result_contracts import ResultContract
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
 class GeneralLimits(Contract):
-    model_attempts: int = Field(default=12, ge=1)
-    tool_attempts: int = Field(default=48, ge=2)
-    total_tokens: int = Field(default=16000, ge=1024)
-    active_seconds: int = Field(default=600, ge=10)
-    command_attempts: int = Field(default=16, ge=2)
+    model_attempts: int | None = Field(default=None, strict=True, ge=1)
+    tool_attempts: int | None = Field(default=None, strict=True, ge=2)
+    total_tokens: int | None = Field(default=None, strict=True, ge=1024)
+    active_seconds: int | None = Field(default=None, strict=True, ge=10)
+    command_attempts: int | None = Field(default=None, strict=True, ge=2)
     files: int = Field(default=256, ge=1, le=256)
     file_bytes: int = Field(default=262144, ge=1, le=262144)
     revision_bytes: int = Field(default=4194304, ge=1, le=4194304)
@@ -79,7 +81,7 @@ class ResourceUpdate(Contract):
 class GeneralPolicy(Contract):
     schema_version: Literal[3] = 3
     limits: GeneralLimits = Field(default_factory=GeneralLimits)
-    resources: ResourcePolicy | None = None
+    resources: ResourcePolicy | None = Field(default_factory=ResourcePolicy)
     workspace_policy: str = Field(default="python-project-v3", pattern=r"^[a-zA-Z0-9._-]+$", max_length=100)
     delegation: DelegationPolicy | None = None
     context_policy: str = Field(default="memory-v1", pattern=r"^[a-zA-Z0-9._-]+$", max_length=100)
@@ -87,6 +89,17 @@ class GeneralPolicy(Contract):
     skills: list[str] = Field(default_factory=list, max_length=8)
     evidence_policy: Literal["scoped-v3"] = "scoped-v3"
     effect_policy: Literal["declared-v3"] = "declared-v3"
+
+    @model_validator(mode="after")
+    def legacy_limits(self):
+        # Persisted agents with resources=null retain the original finite defaults.
+        if self.resources is None:
+            from .resources import LEGACY_DEFAULTS
+
+            self.limits = self.limits.model_copy(
+                update={k: v for k, v in LEGACY_DEFAULTS.items() if getattr(self.limits, k) is None}
+            )
+        return self
 
 
 class CheckSpec(Contract):
@@ -122,6 +135,7 @@ class TaskGoal(Contract):
     criteria: list[Criterion] = Field(min_length=1, max_length=12)
     assumptions: list[Annotated[str, Field(max_length=512)]] = Field(default_factory=list, max_length=8)
     version: int = Field(default=1, ge=1)
+    result_contract: ResultContract | None = None
 
     @model_validator(mode="after")
     def unique_ids(self):
@@ -357,3 +371,21 @@ class OperationInspection(Contract):
 class OperationPage(Contract):
     items: list[OperationInspection] = Field(max_length=16)
     next_cursor: int | None = None
+
+
+class ReconciliationRequest(Contract):
+    kind: Literal["external_write", "model_usage"]
+    target_id: str = Field(min_length=1, max_length=160)
+    reported_tokens: int | None = Field(default=None, strict=True, ge=0, le=1000000000)
+    evidence_ref: str | None = Field(
+        default=None, min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9._:/-]+$"
+    )
+
+    @model_validator(mode="after")
+    def evidence(self):
+        if self.kind == "model_usage":
+            if self.reported_tokens is None or self.evidence_ref is None:
+                raise ValueError("Model accounting requires reported usage and an evidence reference")
+        elif self.reported_tokens is not None or self.evidence_ref is not None:
+            raise ValueError("External writes require the pinned handler's evidence")
+        return self

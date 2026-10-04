@@ -212,7 +212,7 @@ def main():
         "- [Machine-readable results and case-level judgments](jev-harness-value-results-2026-09-23.json)",
         "- [Dataset preparation](../scripts/jev_harness_value.py), [payload minimization](../scripts/jev_harness_payload.py), [offline report](../scripts/jev_harness_report.py)",
         "- Local raw evidence, frozen adoption protocol, payload audit, and JUnit report: `var/acceptance/jev-harness-value-2026-09-23/` (gitignored).",
-        "- Recorded source of the real agent runs: [completion model findings](completion-models-findings.md).",
+        "- Recorded source of the real agent runs: [retained completion-model run evidence](../var/acceptance/completion-models-verified-v1/live.json).",
         "- The live collection is terminal. The report can be recomputed offline with `.venv/bin/python -m scripts.jev_harness_report`; this makes no paid calls.",
         "",
     ]

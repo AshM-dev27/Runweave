@@ -136,7 +136,7 @@ async def execute(args):
             tools=tools,
             max_tokens=cap,
             instructions="Work autonomously using the authorized general actions. Finish the task with scoped evidence. Preserve user checks. Do not claim universal correctness.",
-            general=GeneralPolicy(limits={"model_attempts": limit}),
+            general=GeneralPolicy(resources=None, limits={"model_attempts": limit}),
         )
 
     async def scenario(client, name, cfg, prompt, fake, files=None, task=None, expected=None):

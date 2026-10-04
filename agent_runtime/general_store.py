@@ -19,10 +19,11 @@ from .general_db import (
     ProjectWorkspaceRow,
 )
 from .project_store import ProjectStore, covered, digest, fail, path
+from .reconciliation import ReconciliationStore
 from .resource_store import ResourceStore
 
 
-class GeneralStore(ResourceStore, ProjectStore):
+class GeneralStore(ReconciliationStore, ResourceStore, ProjectStore):
     async def general(self, run_id):
         async with self.database.sessions() as db:
             row = await db.get(GeneralRunRow, run_id)
@@ -99,6 +100,10 @@ class GeneralStore(ResourceStore, ProjectStore):
                     "owner": owner.run_id,
                     "run_id": gr.run_id,
                     "source": "assignment.limits" if local else state["sources"]["active_seconds"],
+                    "limit_type": "budget"
+                    if local
+                    or state["sources"]["active_seconds"] in {"agent.limits", "authorized_update", "default"}
+                    else "ceiling",
                     "limit": limit,
                     "used": limit - remaining,
                     "reserved": 0,
@@ -184,6 +189,16 @@ class GeneralStore(ResourceStore, ProjectStore):
         )
         if any(type(ceilings.get(k)) is not int or ceilings[k] < 1 for k in RESOURCE_KEYS):
             fail("invalid_operator_resource_policy", 422)
+        ceilings = dict(ceilings)
+        reg = self.selection(config)
+        task_limits = {k: policy["limits"][k] for k in RESOURCE_KEYS}
+        ceiling_sources = {k: "operator.resource_ceilings" for k in RESOURCE_KEYS}
+        if reg.total_tokens_limit <= ceilings["total_tokens"]:
+            ceilings["total_tokens"] = reg.total_tokens_limit
+            ceiling_sources["total_tokens"] = "model.registration"
+        for kind in RESOURCE_KEYS:
+            if policy["limits"][kind] is None:
+                policy["limits"][kind] = ceilings[kind]
         if any(policy["limits"][k] > ceilings[k] for k in RESOURCE_KEYS):
             fail("resource_limit_exceeds_operator", 422)
         if not policy.get("resources") and policy.get("delegation"):
@@ -200,14 +215,10 @@ class GeneralStore(ResourceStore, ProjectStore):
             if any(v > ceilings[k] for k, v in policy["delegation"]["limits"].items()):
                 fail("child_limit_exceeds_operator", 422)
         if policy.get("resources") and any(
-            v > ceilings[k] for k, v in policy["resources"]["finalization"].items()
+            v > operator.get("resource_ceilings", LEGACY_CEILINGS)[k]
+            for k, v in policy["resources"]["finalization"].items()
         ):
             fail("finalization_reserve_exceeds_operator", 422)
-        reg = self.selection(config)
-        if policy["limits"]["total_tokens"] > reg.total_tokens_limit:
-            if "total_tokens" in config.general.limits.model_fields_set:
-                fail("Token limit exceeds registration")
-            policy["limits"]["total_tokens"] = reg.total_tokens_limit
         if (
             not policy.get("resources")
             and (any(a.startswith("workspace_") for a in config.tools) or config.general.delegation)
@@ -246,10 +257,10 @@ class GeneralStore(ResourceStore, ProjectStore):
                                 **ceilings,
                                 "total_tokens": min(ceilings["total_tokens"], reg.total_tokens_limit),
                             },
+                            "task_limits": task_limits,
+                            "ceiling_sources": ceiling_sources,
                             "sources": {
-                                k: "agent.limits"
-                                if k in config.general.limits.model_fields_set
-                                else "default"
+                                k: "agent.limits" if task_limits[k] is not None else ceiling_sources[k]
                                 for k in RESOURCE_KEYS
                             },
                             "pause": None,
@@ -457,9 +468,11 @@ class GeneralStore(ResourceStore, ProjectStore):
         )
 
     async def completion_gaps(self, db, row, gr, action):
+        from .result_contracts import validate_result_contract
+
         assessment = CompletionAssessment.model_validate(action["assessment"])
         state, goal = gr.data["task_state"], gr.data["goal"]
-        gaps = []
+        gaps = validate_result_contract(goal.get("result_contract"), action["answer"])
         if (assessment.state_version, assessment.goal_version, assessment.revision_id) != (
             state["version"],
             goal["version"],
@@ -649,7 +662,7 @@ class GeneralStore(ResourceStore, ProjectStore):
                     db.add(OutboxRow(id="cancel:" + rid, run_id=rid, kind="cancel"))
         return await self.get(root.run_id)
 
-    async def general_cleanup(self, run_id, *, allow_complete=True):
+    async def general_cleanup(self, run_id, *, allow_complete=True, provider_io=False):
         """Acknowledge committed bundles only; pending jobs remain observable."""
         state = await self.general(run_id)
         executor = self.executors.get(state["policy"]["workspace_policy"], state.get("executor_version", 1))
@@ -664,7 +677,7 @@ class GeneralStore(ResourceStore, ProjectStore):
             if op.data.get("external") and op.data.get("result") is None:
                 from .extension_runtime import cleanup_extension
 
-                pending |= not await cleanup_extension(self, run_id, op.id)
+                pending |= not await cleanup_extension(self, run_id, op.id, provider_io=provider_io)
                 continue
             if not op.data.get("command") or op.data.get("acknowledged"):
                 continue

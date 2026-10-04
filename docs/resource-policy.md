@@ -1,8 +1,8 @@
 # Resource policy without additional model instructions
 
-RunWeave can enforce compute limits, share capacity across children, and pause for an authorized increase without asking a model to interpret permission rules. This is an opt-in v3 policy. Existing configurations with `general.resources: null` retain their legacy allocation and stop behavior.
+RunWeave can enforce compute limits, share capacity across children, and pause for an authorized increase without asking a model to interpret permission rules. New v3 policies use shared allocation and durable resource waits by default. Existing configurations with `general.resources: null` retain their legacy allocation and stop behavior. Persisted runs retain their effective limits and policy snapshots.
 
-## Enable shared allocation
+## Configure budgets and shared allocation
 
 ```python
 from agent_runtime.general_contracts import GeneralPolicy
@@ -25,7 +25,19 @@ Choose a registered live provider/model for language tasks. Enabling this policy
 
 `shared` means actual spending across the entire tree is admitted atomically against the root ledger. A child's `limits` are estimates: it can exceed an estimate while shared capacity remains. Creating children does not pre-spend their estimates. `Run.assignment.limits` and the legacy `effective_grants.limits` field retain assignment values; use `/resources` or `/budget` for authoritative shared capacity. With `allocation: "fixed"`, assignment limits are also enforced as local caps. Limits in the delegation policy bound authorized fixed child increases.
 
-Limits remain finite and inspectable. Omitting a limit uses the existing declared `GeneralLimits` default; it does not mean unlimited. The operator's `config/general.json.resource_ceilings` determines allowable compute limits for new opted-in runs. The selected model registration also bounds total tokens. These ceilings are pinned at submission; increasing a run limit cannot bypass them. File/storage limits, child count/depth, context bounds, sandbox limits, and per-request timeouts remain separate controls.
+Compute task budgets are optional: omitted or null fields impose no task-specific cap. Define a positive `general.limits` value only when that task budget is intended. The runtime still has finite, inspectable infrastructure ceilings: the operator's `config/general.json.resource_ceilings` and the selected model registration's total-token ceiling. The checked-in live model registrations allow 128,000 total tokens and 65,536 serialized context bytes; the deterministic test registration retains 16,000 tokens and 24,576 context bytes. These are operator configurations, not provider-native model limits. `/resources.task_limits` preserves null versus explicitly declared values, `/resources.limits` shows the effective capacity, and `sources` identifies the budget or ceiling responsible. A pause includes `limit_type: "budget"` or `"ceiling"`. These ceilings are pinned at submission; increasing a run limit cannot bypass them. File/storage limits, child count/depth, context bounds, sandbox limits, and per-request timeouts remain separate controls.
+
+## Automatic task sizing
+
+New agents default to `adaptive: true`. A caller can submit an ordinary task through the same API without choosing a size profile. The runtime estimates initial demand from input bytes, attachment metadata, workspace presence, and declared criteria/checks. This is a deterministic sizing heuristic, not another model call or a semantic complexity classifier.
+
+A small task starts with up to 1,024 output tokens; larger inputs start with up to 2,048. Observed output use near the current cap increases the allowance for the next call. A provider response marked truncated is charged and retried with a larger output allowance before any partial proposal can execute. Growth stops at explicit `max_tokens` or the pinned registration ceiling (currently 4,096 for the checked-in live models). An unfinished response at that ceiling stops execution. Each physical request is accounted for, and ambiguous usage remains reserved. Context capacity grows from 24,576 bytes up to the registered ceiling as serialized demand increases; larger source files must still be read in bounded portions.
+
+`/budget.adaptive` (and v3 `/resources.adaptive`) exposes the initial input measurements, current output/context settings, revision, and working resource estimates. `resources.adapted` events record changes without copying prompt or file contents. Working estimates expand within hard grants; they are not additional spending authority. Explicit `general.limits`, toolkit budgets, file grants, approvals, selected model, and reasoning settings remain enforced independently.
+
+For omitted v3 compute budgets, `config/general.json.adaptive_ceilings` currently pins at most 64 model attempts, 256 tool attempts, 64 commands, 128,000 total tokens, and 1,800 active seconds, further bounded by operator and model ceilings. Toolkit defaults resolve to 24 model attempts, 96 tool calls, and 600 seconds, with the registration's total-token ceiling. Explicit values remain hard caps. At a hard resource limit, existing pause/fail behavior applies; adaptation cannot approve writes or authorize a budget increase.
+
+`adaptive: false` disables sizing and output retries, using the previous omitted toolkit defaults (6 requests, 6 tool calls, 1,024 output tokens, 120 seconds). Existing submitted runs and registrations stay pinned. For automatic output sizing, create the agent with `max_tokens` omitted or null. Existing agents with an explicit value keep that cap for future submissions.
 
 ## Inspect and resume
 
@@ -50,7 +62,7 @@ Only increase the resource identified in `pause.block` when that increase is int
 
 The endpoints are `GET /v1/runs/{id}/resources` and `PUT /v1/runs/{id}/resources`. They use the existing workspace authentication. PUT requires `Idempotency-Key` and `{"expected_version": 1, "limits": {"model_attempts": 40}}`. Updates only increase positive integer compute limits and use compare-and-swap on the tree's version. An identical retry returns its original receipt; conflicting reuse, stale versions, decreases, terminal runs, and ceiling violations are rejected. For a fixed child, PUT to the child ID changes its local limits within the pinned delegation ceilings. Shared children use the root endpoint.
 
-The runtime persists `resources.paused`, `resources.updated`, and `resources.resumed` events. A pause identifies the resource, root/child scope, source, limit, usage, held reservation, and required capacity. Temporal waits and retries the same durable operation. It does not ask the model to request permission, summarize policy, or repeat completed tool effects. In-flight model results and completion proposals remain reusable.
+The runtime persists `resources.paused`, `resources.updated`, and `resources.resumed` events. A pause identifies the resource, root/child scope, source, limit, usage, held reservation, and required capacity. Temporal waits and retries the same durable operation. `client.wait()` waits through temporary in-flight reservation shortages; it returns a budget pause when an actual effective limit requires attention. It does not ask the model to request permission, summarize policy, or repeat completed tool effects. In-flight model results and completion proposals remain reusable.
 
 `on_limit: "fail"` is available when a terminal stop is preferred. The default pause allowance is 86,400 seconds across the tree, configurable from 1 to 604,800. Exhausting it stops with `resource_pause_timeout`. Budget waits do not consume active time. Approval and budget waits may overlap without double-counting elapsed time, and cancellation still terminates the tree.
 
@@ -69,20 +81,13 @@ Model accounting distinguishes:
 
 A trusted adapter can raise `RequestNotDispatched`; the runtime also recognizes it through an SDK's explicit exception cause chain. Text, HTTP status, and generic network failures cannot claim this refund. The evaluation transport uses this type when its immutable guard refuses a request before sending it. Historical campaign manifests and ledgers remain unchanged.
 
-Token admission uses the pinned context policy's reservation estimate and reported usage, not a guarantee of exact provider billing. An unknown reservation is intentionally not refunded automatically; there is no new manual reconciliation endpoint in this change.
+Token admission uses the pinned context policy's reservation estimate and reported usage, not a guarantee of exact provider billing. An unknown reservation is not refunded automatically. The [operator recovery interface](operator-recovery.md) can replace its token reservation with evidenced usage on a stopped tree, while retaining the model-attempt charge.
 
 ## Permissions and token cost
 
 Tool grants, file scopes, effect approvals, and sandbox checks still execute in code. Models receive their authorized capabilities, relevant schemas, current task state, and compact remaining counters. Resource update endpoints, ceiling configuration, pause settings, and policy explanations are not added to model instructions. Shared mode omits redundant child-allocation fields.
 
-The deterministic comparison uses the same model-visible instructions, message content, and compact output schema, counted with `o200k_base`. Internal message timestamps and provider protocol framing are excluded. These are fixture input measurements, not live provider bills:
-
-| Scenario | Legacy input tokens | Shared input tokens | Difference |
-| --- | ---: | ---: | ---: |
-| Direct task | 647 | 647 | 0 |
-| Workspace read | 758 | 758 | 0 |
-| Delegating parent | 1124 | 1059 | -65 |
-| Child | 792 | 745 | -47 |
+The unit tests compare model-visible payloads for matching explicit limits to detect policy overhead. Token estimates exclude provider protocol framing and are not provider bills.
 
 The policy mechanism itself adds no model calls. Allowing a previously capped task to continue can naturally increase that task's total execution spend.
 
@@ -90,4 +95,4 @@ The policy mechanism itself adds no model calls. Allowing a previously capped ta
 
 Coverage is in `tests/test_resources.py` and `tests/test_resources_integration.py`: shared/fixed allocation, concurrent spending, root/child limits, idempotent authenticated updates, ceilings, token payloads, typed non-dispatch versus unknown outcomes, active-time accounting, in-flight results, completion and effect approval recovery, pause/resume at model/tool/review boundaries, cancellation, timeout, fail mode, and Temporal replay. Tests use fake models and isolated PostgreSQL/Temporal workers.
 
-See the [initial unpaid validation](resource-policy-validation-2026-09-26.md) and subsequent [paid validation and completion correction](resource-live-validation-2026-09-26.md). The paid follow-up passed pause/resume and parallel completion under their existing scenario caps; this small sample does not establish general reliability. Updated services have not been deployed.
+Follow [testing and validation](validation-index.md) to run these checks. Model accuracy and runtime policy enforcement are separate evaluation targets.

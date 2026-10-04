@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 from contextlib import asynccontextmanager
 
 import httpx
@@ -14,7 +15,7 @@ from agent_runtime.client import Client
 from agent_runtime.dispatch import Dispatcher
 from agent_runtime.general_contracts import GeneralPolicy
 from agent_runtime.general_runtime import GENERAL_ACTIVITIES
-from agent_runtime.general_workflow import GeneralWorkflow
+from agent_runtime.general_workflow import ExtensionCleanupWorkflow, GeneralWorkflow, ReconciliationWorkflow
 from agent_runtime.schemas import AgentConfig
 
 pytestmark = pytest.mark.integration
@@ -27,7 +28,10 @@ async def backend(store, monkeypatch):
     temporal = await TemporalClient.connect("localhost:7233", plugins=[PydanticAIPlugin()])
     queue = store.test_schema
     async with Worker(
-        temporal, task_queue=queue + "-v3", workflows=[GeneralWorkflow], activities=GENERAL_ACTIVITIES
+        temporal,
+        task_queue=queue + "-v3",
+        workflows=[GeneralWorkflow, ReconciliationWorkflow, ExtensionCleanupWorkflow],
+        activities=GENERAL_ACTIVITIES,
     ):
         dispatch = asyncio.create_task(Dispatcher(store, temporal, queue).run())
         try:
@@ -224,6 +228,8 @@ async def test_actual_isolation_and_failure_receipts(pg_store, monkeypatch, prog
 async def test_actual_broker_restart_reconstructs_project(pg_store, monkeypatch):
     from agent_runtime.project_store import digest
 
+    broker_name = os.environ.get("TEST_PROJECT_BROKER_NAME", "agent-runtime-v3-test-broker")
+
     async with backend(pg_store, monkeypatch) as (client, _):
         workspace = await client.workspace_create({"base.txt": b"committed"})
         agent = await client.create_agent(
@@ -278,12 +284,12 @@ async def test_actual_broker_restart_reconstructs_project(pg_store, monkeypatch)
             "kill",
             "--signal",
             "KILL",
-            "agent-runtime-v3-test-broker",
+            broker_name,
             stdout=asyncio.subprocess.DEVNULL,
         )
         assert await p.wait() == 0
         p = await asyncio.create_subprocess_exec(
-            "sudo", "-n", "docker", "start", "agent-runtime-v3-test-broker", stdout=asyncio.subprocess.DEVNULL
+            "sudo", "-n", "docker", "start", broker_name, stdout=asyncio.subprocess.DEVNULL
         )
         assert await p.wait() == 0
         result = await client.wait(run.id, timeout=100)

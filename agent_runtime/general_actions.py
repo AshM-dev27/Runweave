@@ -33,6 +33,10 @@ class GeneralActions:
                     fail("operation_conflict", 409)
                 if old.data.get("result") is not None:
                     return old.data["result"]
+                # A running hosted tool must reach its deadline and clean up even when
+                # the root's active budget has just expired. No new dispatch is allowed.
+                if old.data.get("external") and old.data.get("deferred"):
+                    return {"external": True, "operation_id": op_id}
                 await self.general_lock(db, run_id)
                 if old.data.get("external"):
                     return {"external": True, "operation_id": op_id}
@@ -175,7 +179,12 @@ class GeneralActions:
                         ):
                             fail("join_before_approval", 409)
                         root_row = await db.get(RunRow, root.run_id)
+                        from .approval_preview import build_preview
+
                         approval = {"id": op_id, "tool": alias, "arguments": args, "origin_run_id": run_id}
+                        preview = await build_preview(db, gr.data, entry, args)
+                        if preview is not None:
+                            approval["preview"] = preview
                         root.data = {**root.data, "approval_started": time.time()}
                         root_row.status, root_row.approvals = "awaiting_approval", [approval]
                         row.status = "awaiting_approval"
@@ -1046,6 +1055,8 @@ class GeneralActions:
                 "assignment": raw,
                 "effective_capabilities": assignment.tools,
             }
+            if root.data.get("adaptive"):
+                data["adaptive"] = copy.deepcopy(root.data["adaptive"])
             cg = GeneralRunRow(run_id=cid, root_id=root.run_id, parent_id=row.id, data=data)
             db.add(cg)
             db.add(

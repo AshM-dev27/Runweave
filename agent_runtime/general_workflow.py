@@ -14,6 +14,7 @@ class GeneralWorkflow:
         self.decisions = {}
         self.resource_version = 0
         self.resource_controls = False
+        self.fast_actions = False
 
     @workflow.signal
     def resources(self, value: dict):
@@ -26,12 +27,21 @@ class GeneralWorkflow:
     async def call(self, name, value, seconds=90):
         while True:
             try:
-                return await workflow.execute_activity(
+                result = await workflow.execute_activity(
                     name,
                     value,
                     start_to_close_timeout=timedelta(seconds=seconds),
+                    **(
+                        {"heartbeat_timeout": timedelta(seconds=12)}
+                        if self.fast_actions and name == "general_action"
+                        else {}
+                    ),
                     retry_policy=RetryPolicy(maximum_attempts=2, initial_interval=timedelta(seconds=2)),
                 )
+                if result and isinstance(result, dict) and result.get("external_pending"):
+                    await workflow.sleep(timedelta(seconds=max(2, min(30, result["retry_after"]))))
+                    continue
+                return result
             except ActivityError as exc:
                 cause = exc.cause
                 if not (
@@ -68,8 +78,10 @@ class GeneralWorkflow:
         children = {}
         self.run_id = run_id
         self.resource_controls = workflow.patched("v3-resource-controls-v1")
+        self.fast_actions = workflow.patched("v3-action-heartbeats-v1")
         semantic = workflow.patched("v3-semantic-completion-v1")
         completion_loop = workflow.patched("v3-completion-loop-v2")
+        batch_checks = workflow.patched("v3-batch-verification-v1")
         try:
             state = await self.call("general_state", run_id)
             active = state["policy"]["limits"]["active_seconds"]
@@ -86,6 +98,7 @@ class GeneralWorkflow:
                     {
                         "run_id": run_id,
                         **({"completion_loop": 2} if completion_loop else {}),
+                        **({"batch_checks": True} if batch_checks else {}),
                     }
                     if semantic
                     else run_id,
@@ -99,7 +112,14 @@ class GeneralWorkflow:
                 if (
                     semantic
                     and decision.get("semantic")
-                    and decision["decision"]["action"]["kind"] == "complete"
+                    and (
+                        decision["decision"]["action"]["kind"] == "complete"
+                        or (
+                            batch_checks
+                            and decision["decision"]["action"].get("arguments", {}).get("check_id")
+                            == "$pending"
+                        )
+                    )
                 ):
                     while True:
                         prepared = await self.call("general_completion", payload)
@@ -111,6 +131,9 @@ class GeneralWorkflow:
                                 "general_stop", {"run_id": run_id, "code": "stale_completion_phase"}
                             )
                             return
+                        if prepared.get("verification_done"):
+                            result = {}
+                            break
                         result = await self.call("general_action", prepared)
                         if result.get("command"):
                             await self.call("general_command", {"run_id": run_id, **result}, 85)
@@ -167,8 +190,41 @@ class GeneralWorkflow:
                 "model_not_dispatched",
                 "no_progress",
                 "context_limit",
+                "output_limit",
                 "run_timeout",
                 "sandbox_unavailable",
             }:
                 code = "execution_stopped"
             await self.call("general_stop", {"run_id": run_id, "code": code})
+
+
+@workflow.defn
+class ReconciliationWorkflow:
+    @workflow.run
+    async def run(self, request: dict):
+        return await workflow.execute_activity(
+            "reconcile_operation",
+            request,
+            start_to_close_timeout=timedelta(seconds=90),
+            retry_policy=RetryPolicy(
+                maximum_attempts=3, initial_interval=timedelta(seconds=30), backoff_coefficient=1
+            ),
+        )
+
+
+@workflow.defn
+class ExtensionCleanupWorkflow:
+    @workflow.run
+    async def run(self, run_id: str):
+        # Only polling/cancel/stop: this workflow can never dispatch a new task.
+        fast = workflow.patched("v3-fast-extension-cleanup-v1")
+        for attempt in range(16 if fast else 10):
+            complete = await workflow.execute_activity(
+                "cleanup_browser_extensions",
+                run_id,
+                start_to_close_timeout=timedelta(seconds=90),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+            if complete:
+                return
+            await workflow.sleep(timedelta(seconds=min(30, 2 ** min(attempt + 1, 5)) if fast else 30))

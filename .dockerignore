@@ -9,3 +9,12 @@ docs
 *.sqlite*
 *.log
 sandbox/state
+.agents
+.codex
+.ruff_cache
+output
+developer_tools
+tests
+scripts
+examples
+.github

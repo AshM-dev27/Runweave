@@ -41,7 +41,7 @@ def sources():
     }
 
 
-async def matrix(store, monkeypatch, directory, live):
+async def matrix(store, monkeypatch, directory, live, scenario_names=None):
     before = sources()
     directory.mkdir(parents=True, exist_ok=True)
     guard, ledger = policy(), directory / "requests.sqlite"
@@ -71,7 +71,7 @@ async def matrix(store, monkeypatch, directory, live):
     results = []
     root_ids = []
     try:
-        for name in MANIFEST["scenario_limits"]:
+        for name in scenario_names or MANIFEST["scenario_limits"]:
             with monkeypatch.context() as patch:
                 review_case = name.startswith("review_")
                 parallel = name == "parallel"

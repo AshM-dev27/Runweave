@@ -83,6 +83,7 @@ class RunBudget(DTO):
     max_tool_calls: int
     max_total_tokens: int | None
     v3: dict | None = None
+    adaptive: dict | None = None
     successful_usage: dict[str, int] | None = Field(
         default=None,
         description="V1 persisted Run.usage; empty means no usage recorded yet, not zero physical attempts. V2 uses the shared ledger.",

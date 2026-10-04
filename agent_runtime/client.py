@@ -1,35 +1,19 @@
 """Small asynchronous client using only the versioned public HTTP contracts."""
 
 import asyncio
+import hashlib
+import inspect
+import math
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
 
+from .client_errors import ClientError, check
+from .client_results import MESSAGES, RunProgress, RunResult, outcome
 from .schemas import Agent, AgentConfig, Event, Run, RunCreate, Session
 
 TERMINAL = {"completed", "failed", "cancelled"}
-
-
-class ClientError(RuntimeError):
-    """Safe to display: response bodies and transport exceptions are never included."""
-
-    def __init__(self, message, *, idempotency_key=None):
-        super().__init__(message)
-        self.idempotency_key = idempotency_key
-
-
-def check(response):
-    if response.is_error:
-        hints = {
-            401: "Check API_KEY.",
-            404: "Check the resource ID.",
-            409: "Check the idempotency key, session activity or prior approval decision.",
-            422: "Check input fields and registered model limits.",
-            429: "Wait for active runs to finish.",
-        }
-        raise ClientError(
-            f"HTTP {response.status_code}. {hints.get(response.status_code, 'Check service readiness.')}"
-        )
 
 
 class Client:
@@ -50,7 +34,11 @@ class Client:
         for attempt in range(3 if retry else 1):
             try:
                 response = await self.http.request(method, path, **kwargs)
-                check(response)
+                try:
+                    check(response)
+                except ClientError as exc:
+                    exc.idempotency_key = kwargs.get("headers", {}).get("Idempotency-Key")
+                    raise
                 return response.json()
             except httpx.TransportError:
                 if not retry or attempt == 2:
@@ -59,6 +47,14 @@ class Client:
                         idempotency_key=kwargs.get("headers", {}).get("Idempotency-Key"),
                     ) from None
                 await asyncio.sleep(0.1 * (attempt + 1))
+
+    async def evidence(self, run_id):
+        from .evidence import AcceptanceBundle, verify_evidence_bundle
+
+        raw = await self.request("GET", f"/v1/runs/{run_id}/evidence", retry=True)
+        if not verify_evidence_bundle(raw).valid:
+            raise ClientError("Evidence integrity or acceptance verification failed.")
+        return AcceptanceBundle.model_validate(raw)
 
     async def task(self, run_id):
         return await self.request("GET", f"/v1/runs/{run_id}/task", retry=True)
@@ -233,6 +229,191 @@ class Client:
             )
         )
 
+    async def run(
+        self,
+        agent_id,
+        input,
+        *,
+        files=None,
+        session_id=None,
+        artifact_ids=None,
+        task=None,
+        workspace=None,
+        idempotency_key=None,
+        timeout=150,
+        on_progress=None,
+    ) -> RunResult:
+        """Upload explicit files, submit once, and return a result or an actionable pause.
+
+        timeout bounds waiting after submission, not server execution. A timeout never
+        cancels the task. Retry this same request with its key, or use result(run_id).
+        """
+        key = idempotency_key if idempotency_key is not None else uuid4().hex
+        run_id = None
+        try:
+            self._validate_wait(timeout, on_progress)
+            if (
+                not isinstance(key, str)
+                or not 1 <= len(key) <= 128
+                or not key.isascii()
+                or any(ord(c) < 33 or ord(c) > 126 for c in key)
+            ):
+                raise ClientError(
+                    "Use an idempotency key of 1–128 printable ASCII characters without spaces."
+                )
+            from pydantic import ValidationError
+
+            from .client_errors import validation_fields
+
+            try:
+                body = RunCreate(
+                    agent_id=agent_id,
+                    input=input,
+                    session_id=session_id,
+                    artifact_ids=artifact_ids or [],
+                    task=task,
+                    workspace=workspace,
+                )
+            except ValidationError as exc:
+                fields = validation_fields(exc.errors(include_url=False, include_input=False))
+                raise ClientError(
+                    "Check task input fields: " + ", ".join(fields) + ".",
+                    code="validation_error",
+                    fields=fields,
+                ) from None
+            prepared = self._prepare_files(files)
+            if len(prepared) + len(body.artifact_ids) > 8:
+                raise ClientError("Attach at most eight files and existing artifacts per task.")
+            attached = list(body.artifact_ids)
+            for index, (filename, media, content) in enumerate(prepared):
+                await self._progress(
+                    on_progress,
+                    RunProgress(
+                        stage="uploading",
+                        message=f"Uploading file {index + 1} of {len(prepared)}.",
+                        idempotency_key=key,
+                    ),
+                )
+                # Stable per-request slots detect changed files instead of silently creating a new upload.
+                upload_key = "run-file-" + hashlib.sha256(f"{key}:{index}".encode()).hexdigest()
+                ref = await self.upload(content, media, filename, idempotency_key=upload_key)
+                attached.append(ref.id)
+            submitted = await self.submit(
+                agent_id,
+                input,
+                session_id=session_id,
+                artifact_ids=attached,
+                task=task,
+                workspace=workspace,
+                idempotency_key=key,
+            )
+            run_id = submitted.id
+            await self._progress(
+                on_progress,
+                RunProgress(
+                    stage="submitted",
+                    message="Task submitted; this run ID can be used to resume waiting.",
+                    run_id=run_id,
+                    idempotency_key=key,
+                ),
+            )
+            return await self.result(run_id, timeout=timeout, on_progress=on_progress, idempotency_key=key)
+        except ClientError as exc:
+            exc.idempotency_key = key
+            exc.run_id = run_id or exc.run_id
+            raise
+
+    async def result(self, run_id, *, timeout=150, on_progress=None, idempotency_key=None) -> RunResult:
+        """Wait for an existing task without submitting, approving or increasing limits."""
+        self._validate_wait(timeout, on_progress)
+        try:
+            run = await self.wait(run_id, timeout=timeout, on_progress=on_progress)
+            resources = await self.resources(run_id) if run.status == "paused_budget" else None
+            return outcome(run, resources, idempotency_key)
+        except ClientError as exc:
+            exc.run_id = run_id
+            exc.idempotency_key = idempotency_key
+            raise
+
+    @staticmethod
+    def _validate_wait(timeout, callback):
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ClientError("timeout must be a positive, finite number of seconds.")
+        if callback is not None and not callable(callback):
+            raise ClientError("on_progress must be a callable accepting one RunProgress value.")
+
+    @staticmethod
+    async def _progress(callback, progress):
+        if callback is None:
+            return
+        try:
+            returned = callback(progress)
+            if inspect.isawaitable(returned):
+                await returned
+        except Exception:
+            raise ClientError(
+                "Progress callback failed. Use run_id to resume waiting if submission already succeeded.",
+                code="progress_callback_failed",
+                run_id=progress.run_id,
+                idempotency_key=progress.idempotency_key,
+            ) from None
+
+    @staticmethod
+    def _prepare_files(files):
+        import os
+        import stat
+
+        from .artifacts import MAX_ARTIFACT, validate
+        from .client_errors import PUBLIC_ERRORS
+
+        if files is None:
+            return []
+        if not isinstance(files, (list, tuple)) or len(files) > 8:
+            raise ClientError("files must be a list of at most eight local file paths.")
+        media_types = {
+            ".txt": "text/plain",
+            ".md": "text/markdown",
+            ".csv": "text/csv",
+            ".json": "application/json",
+            ".zip": "application/zip",
+            ".diff": "text/x-diff",
+            ".patch": "text/x-diff",
+        }
+        prepared = []
+        for item in files:
+            try:
+                path = Path(item)
+                if path.suffix.lower() not in media_types:
+                    raise ClientError(
+                        "Unsupported file type. Use .txt, .md, .csv, .json, .zip, .diff or .patch."
+                    )
+                if path.is_symlink():
+                    raise ClientError("Upload a regular file, not a symbolic link.")
+                # Open nonblocking so a device or FIFO cannot hang the client before validation.
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+                with os.fdopen(fd, "rb") as file:
+                    if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                        raise ClientError("Upload a regular file.")
+                    content = file.read(MAX_ARTIFACT + 1)
+                media = media_types[path.suffix.lower()]
+                validate(content, media, path.name)
+                prepared.append((path.name, media, content))
+            except (OSError, TypeError):
+                raise ClientError(
+                    "Cannot read an attached file. Check that each path is a readable regular file."
+                ) from None
+            except ValueError as exc:
+                code, message = PUBLIC_ERRORS.get(
+                    str(exc), ("invalid_file", "Check the attached file's content and format.")
+                )
+                raise ClientError(message, code=code) from None
+        return prepared
+
     async def continue_run(
         self, run_id, input, *, idempotency_key=None, artifact_ids=None, task=None, workspace=None
     ):
@@ -263,6 +444,21 @@ class Client:
     async def deny(self, run_id, approval_id):
         return await self.decide(run_id, approval_id, False)
 
+    async def recovery(self, run_id, **params):
+        return await self.request("GET", f"/v1/runs/{run_id}/recovery", params=params, retry=True)
+
+    async def reconcile(self, run_id, request, *, idempotency_key=None):
+        return await self.request(
+            "POST",
+            f"/v1/runs/{run_id}/reconciliations",
+            retry=True,
+            headers={"Idempotency-Key": idempotency_key or uuid4().hex},
+            json=request,
+        )
+
+    async def reconciliation(self, run_id, identity):
+        return await self.request("GET", f"/v1/runs/{run_id}/reconciliations/{identity}", retry=True)
+
     async def resources(self, run_id):
         return await self.request("GET", f"/v1/runs/{run_id}/resources", retry=True)
 
@@ -278,21 +474,51 @@ class Client:
     async def cancel(self, run_id):
         return Run.model_validate(await self.request("POST", f"/v1/runs/{run_id}/cancel", retry=True))
 
-    async def wait(self, run_id, *, timeout=150, stop_at_approval=True, stop_at_budget=True):
+    async def wait(
+        self, run_id, *, timeout=150, stop_at_approval=True, stop_at_budget=True, on_progress=None
+    ):
+        self._validate_wait(timeout, on_progress)
+        previous_stage = None
         try:
             async with asyncio.timeout(timeout):
                 while True:
                     run = await self.get(run_id)
+                    stage = (
+                        "cleaning_up"
+                        if run.status in TERMINAL and run.cleanup_state != "complete"
+                        else run.status
+                    )
+                    if run.status == "awaiting_approval" and not run.approvals:
+                        stage = "resuming"
+                    if stage != previous_stage:
+                        await self._progress(
+                            on_progress,
+                            RunProgress(
+                                stage=stage,
+                                message=outcome(run).message if stage in TERMINAL else MESSAGES[stage],
+                                run_id=run_id,
+                                outcome=run.outcome,
+                                outcome_reason=run.outcome_reason,
+                            ),
+                        )
+                        previous_stage = stage
+                    budget_stop = stop_at_budget and run.status == "paused_budget"
+                    if budget_stop:
+                        state = await self.resources(run_id)
+                        # Reservations held by an in-flight request settle without operator action.
+                        budget_stop = (state.get("pause") or {}).get("block", {}).get("reason") != "capacity"
                     if (
                         (run.status in TERMINAL and run.cleanup_state == "complete")
-                        or (stop_at_approval and run.status == "awaiting_approval")
-                        or (stop_at_budget and run.status == "paused_budget")
+                        or (stop_at_approval and run.status == "awaiting_approval" and run.approvals)
+                        or budget_stop
                     ):
                         return run
                     await asyncio.sleep(0.2)
         except TimeoutError:
             raise ClientError(
-                f"Wait timed out. Retrieve or watch run {run_id}; execution may still be active."
+                f"Wait timed out. Resume with client.result({run_id!r}); execution may still be active.",
+                code="wait_timeout",
+                run_id=run_id,
             ) from None
 
     async def watch(self, run_id, *, cursor=0, timeout=180):

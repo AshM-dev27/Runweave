@@ -1,10 +1,12 @@
 """Durable external-tool intents. I/O occurs outside database transactions, in activities."""
 
 import asyncio
+import copy
 import time
 from uuid import uuid4
 
-from .extensions import ToolCall
+from .activity_liveness import LEASE_SECONDS, enabled, leased_call
+from .extensions import DeferredToolResult, ToolCall
 from .general_db import GeneralAttemptRow, GeneralOperationRow, GeneralRecordRow
 from .project_store import fail
 
@@ -14,7 +16,7 @@ TOOL_TIMEOUT_SECONDS = 45
 async def execute_extension(store, run_id, operation_id):
     owner = uuid4().hex
     async with store.database.sessions.begin() as db:
-        row, gr, root = await store.general_lock(db, run_id)
+        row, gr, root = await store.general_lock(db, run_id, active=False)
         op = await db.get(GeneralOperationRow, operation_id)
         if op is None or not op.data.get("external"):
             fail("extension_intent_missing", 409)
@@ -24,6 +26,11 @@ async def execute_extension(store, run_id, operation_id):
         entry = gr.data["tools"][alias]
         definition = entry["extension"]
         handler = store.extensions.handler(definition)
+        deferred = definition["handler"] == "browser_use.v4"
+        if row.status in {"completed", "cancelled", "failed"}:
+            fail("run_not_active", 409)
+        if not (deferred and op.data.get("deferred")):
+            await store.general_lock(db, run_id)
         if entry["effect"]["approval"] == "required" and (
             row.decisions.get(operation_id) is not True
             or op.data.get("scope") in root.data["denied"]
@@ -34,13 +41,14 @@ async def execute_extension(store, run_id, operation_id):
             fail("extension_lease_pending", 409)
         recovering = bool(op.data.get("started"))
         attempts = op.data.get("external_attempts", 0)
-        if attempts >= 2:
+        polling = deferred and op.data.get("deferred", False)
+        if attempts >= 2 and not polling:
             fail("extension_recovery_exhausted", 409)
-        if attempts:
+        if attempts and not polling:
             await store.general_charge_locked(db, gr, root, "tool_attempts")
             db.add(
                 GeneralAttemptRow(
-                    id=f"{operation_id}:tool:{attempts + 1}",
+                    id=f"{operation_id}:tool:{attempts if polling else attempts + 1}",
                     operation_id=operation_id,
                     ordinal=attempts + 1,
                     data={"kind": "tool", "reserved": True},
@@ -49,24 +57,45 @@ async def execute_extension(store, run_id, operation_id):
         op.data = {
             **op.data,
             "started": True,
-            "lease": time.time() + 60,
+            "lease": time.time() + (LEASE_SECONDS if enabled() else 60),
             "owner": owner,
-            "external_attempts": attempts + 1,
+            "external_attempts": attempts if polling else attempts + 1,
             "status": "pending",
         }
         fence = root.data["fence"]
-        call = ToolCall(run_id, operation_id, op.data["decision"]["action"]["arguments"], definition)
+        call = ToolCall(
+            run_id,
+            operation_id,
+            op.data["decision"]["action"]["arguments"],
+            definition,
+            copy.deepcopy(op.data.get("handler_state", {})),
+            max(0, store.general_time_remaining(root.data)),
+            state_writer(store, run_id, operation_id, owner) if deferred else None,
+        )
     result, unknown = None, False
     try:
         async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
-            if recovering and definition["effect"]["kind"] == "external-write":
-                value = await handler.reconcile(call)
-                if value is None:
-                    unknown = True
-                else:
-                    result = store.extensions.result(definition, value)
+
+            async def perform():
+                if recovering and definition["effect"]["kind"] == "external-write":
+                    return await handler.reconcile(call)
+                return await handler.execute(call)
+
+            value = await leased_call(store, run_id, operation_id, owner, perform)
+            if isinstance(value, DeferredToolResult):
+                async with store.database.sessions.begin() as db:
+                    await store.general_lock(db, run_id, active=False)
+                    op = await db.get(GeneralOperationRow, operation_id)
+                    if op.data.get("owner") != owner:
+                        fail("extension_lease_fenced", 409)
+                    op.data = {**op.data, "lease": 0, "deferred": True}
+                return {"external_pending": True, "retry_after": value.retry_after}
+            if value is None:
+                unknown = True
             else:
-                result = store.extensions.result(definition, await handler.execute(call))
+                result = store.extensions.result(definition, value)
+                if deferred and value.get("error"):
+                    result["error"] = value["error"]
     except Exception:
         # A timeout/invalid response can happen after a remote write commits.
         # Do not leak exception bodies or turn an ambiguous effect into success.
@@ -78,7 +107,9 @@ async def execute_extension(store, run_id, operation_id):
         op = await db.get(GeneralOperationRow, operation_id)
         if op.data.get("owner") != owner:
             fail("extension_lease_fenced", 409)
-        attempt = await db.get(GeneralAttemptRow, f"{operation_id}:tool:{attempts + 1}")
+        attempt = await db.get(
+            GeneralAttemptRow, f"{operation_id}:tool:{attempts if polling else attempts + 1}"
+        )
         if attempt:
             attempt.data = {
                 **attempt.data,
@@ -87,7 +118,7 @@ async def execute_extension(store, run_id, operation_id):
             }
         cancelled = row.status in {"cancelled", "failed"} or root.data["fence"] != fence
         if unknown:
-            op.data = {**op.data, "status": "outcome_unknown", "lease": 0}
+            op.data = {**op.data, "status": "outcome_unknown", "lease": 0, "deferred": False}
             result = {
                 "error": "extension_outcome_unknown",
                 "operation_id": operation_id,
@@ -115,38 +146,102 @@ async def execute_extension(store, run_id, operation_id):
         return result
 
 
-async def cleanup_extension(store, run_id, operation_id):
+def state_writer(store, run_id, operation_id, owner):
+    async def save(state):
+        async with store.database.sessions.begin() as db:
+            await store.general_lock(db, run_id, active=False)
+            op = await db.get(GeneralOperationRow, operation_id)
+            if op.data.get("owner") != owner:
+                fail("extension_lease_fenced", 409)
+            op.data = {**op.data, "handler_state": copy.deepcopy(state)}
+
+    return save
+
+
+async def cleanup_extension(store, run_id, operation_id, *, provider_io=False):
     """Classify expired terminal intents without reissuing a cancelled remote call."""
     async with store.database.sessions.begin() as db:
-        row, _, _ = await store.general_lock(db, run_id, active=False)
+        row, gr, _ = await store.general_lock(db, run_id, active=False)
         op = await db.get(GeneralOperationRow, operation_id)
         if op.data.get("result") is not None:
             return True
         if row.status not in {"completed", "failed", "cancelled"} or op.data.get("lease", 0) > time.time():
             return False
-        write = op.data.get("effect_policy", {}).get("kind") != "read"
-        unknown = bool(op.data.get("started")) and write
-        op.data = {
-            **op.data,
-            "lease": 0,
-            "status": "outcome_unknown" if unknown else "complete",
-            **(
-                {}
-                if unknown
-                else {
-                    "result": {
-                        "error": "extension_interrupted"
-                        if op.data.get("started")
-                        else "extension_not_started"
-                    }
+        alias = op.data["decision"]["action"]["capability"]
+        definition = gr.data["tools"][alias]["extension"]
+        if definition["handler"] == "browser_use.v4" and op.data.get("started"):
+            if not provider_io:
+                return False
+            owner = uuid4().hex
+            op.data = {**op.data, "owner": owner, "lease": time.time() + 60}
+            call = ToolCall(
+                run_id,
+                operation_id,
+                op.data["decision"]["action"]["arguments"],
+                definition,
+                state=copy.deepcopy(op.data.get("handler_state", {})),
+                save_state=state_writer(store, run_id, operation_id, owner),
+            )
+        else:
+            call = None
+        if call is None:
+            return await classify_interrupted(store, db, row, op)
+    result = None
+    try:
+        async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
+            value = await store.extensions.handler(definition).cleanup(call)
+            if value is not None and not isinstance(value, DeferredToolResult):
+                result = store.extensions.result(definition, value)
+                if value.get("error"):
+                    result["error"] = value["error"]
+    except Exception:
+        pass
+    async with store.database.sessions.begin() as db:
+        row, _, _ = await store.general_lock(db, run_id, active=False)
+        op = await db.get(GeneralOperationRow, operation_id)
+        if op.data.get("owner") != owner:
+            return False
+        op.data = {**op.data, "lease": 0, "status": "complete" if result else "outcome_unknown"}
+        if result is None:
+            return False
+        op.data = {**op.data, "result": {**result, "effect": True, "operation_id": operation_id}}
+        for ordinal in range(1, op.data.get("external_attempts", 0) + 1):
+            attempt = await db.get(GeneralAttemptRow, f"{operation_id}:tool:{ordinal}")
+            if attempt:
+                attempt.data = {
+                    **attempt.data,
+                    "settled": True,
+                    "outcome": "failed" if result.get("error") else "complete",
                 }
-            ),
-        }
         await store.emit(
-            db,
-            row,
-            operation_id + ":cleanup",
-            "tool.outcome_unknown" if unknown else "tool.interrupted",
-            {"operation_id": operation_id, "registration_id": op.data.get("registration_id")},
+            db, row, operation_id + ":cleanup", "tool.interrupted", {"operation_id": operation_id}
         )
-        return not unknown
+        return True
+
+
+async def classify_interrupted(store, db, row, op):
+    operation_id = op.id
+    write = op.data.get("effect_policy", {}).get("kind") != "read"
+    unknown = bool(op.data.get("started")) and write
+    op.data = {
+        **op.data,
+        "lease": 0,
+        "status": "outcome_unknown" if unknown else "complete",
+        **(
+            {}
+            if unknown
+            else {
+                "result": {
+                    "error": "extension_interrupted" if op.data.get("started") else "extension_not_started"
+                }
+            }
+        ),
+    }
+    await store.emit(
+        db,
+        row,
+        operation_id + ":cleanup",
+        "tool.outcome_unknown" if unknown else "tool.interrupted",
+        {"operation_id": operation_id, "registration_id": op.data.get("registration_id")},
+    )
+    return not unknown

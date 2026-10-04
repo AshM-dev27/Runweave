@@ -1,6 +1,0 @@
-..........{"scenario": "direct", "legacy_tokens": 456, "shared_tokens": 456}
-.{"scenario": "workspace", "legacy_tokens": 567, "shared_tokens": 567}
-.{"scenario": "delegation", "legacy_tokens": 933, "shared_tokens": 868}
-.{"scenario": "child", "legacy_tokens": 601, "shared_tokens": 554}
-.........
-22 passed in 30.10s

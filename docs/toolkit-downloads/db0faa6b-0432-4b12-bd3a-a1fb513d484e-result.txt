@@ -1,5 +1,0 @@
-invoice_id,amount
-INV-001,125.50
-INV-002,80.00
-REF-001,-20.25
-INV-003,14.75

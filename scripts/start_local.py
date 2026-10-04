@@ -40,7 +40,7 @@ def prepare_auth():
             raise RuntimeError("Secret file must be regular.")
         values = dotenv_values(stream=file, interpolate=False)
         key = values.get("API_KEY")
-        if not key:
+        if not key or key == "replace-with-a-long-random-local-api-key":
             key = secrets.token_urlsafe(48)
             file.seek(0, 2)
             file.write(f"\nAPI_KEY={key}\n")

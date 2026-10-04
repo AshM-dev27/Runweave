@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy import func, select
 
+from .adaptive_store import AdaptiveStore
 from .config import settings
 from .db import (
     AgentRow,
@@ -30,7 +31,7 @@ class Problem(Exception):
         self.status, self.detail = status, detail
 
 
-class Store(GeneralActions, GeneralStore, ToolkitStore):
+class Store(AdaptiveStore, GeneralActions, GeneralStore, ToolkitStore):
     def __init__(
         self,
         database,
@@ -108,8 +109,30 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
             return Session(id=row.id, created_at=row.created_at)
 
     @staticmethod
-    def public(row):
-        return Run(**{k: getattr(row, k) for k in Run.model_fields if hasattr(row, k)})
+    async def public(db, row):
+        from .general_db import GeneralRunRow
+        from .task_outcomes import classify
+
+        feature = await db.get(ToolkitRunRow, row.id)
+        general = await db.get(GeneralRunRow, row.id)
+        state = feature.state if feature else {}
+        assessment = (general.data.get("completion_assessment") or {}) if general else {}
+        values = {k: getattr(row, k) for k in Run.model_fields if hasattr(row, k)}
+        # Decisions commit before the worker consumes its signal. Only pending
+        # approvals are actionable during that durable handoff window.
+        values["approvals"] = [a for a in row.approvals if a["id"] not in row.decisions]
+        values["outcome"], values["outcome_reason"] = classify(
+            row.status,
+            error=row.error,
+            denied=any(value is False for value in row.decisions.values()) or state.get("denied", False),
+            issues=state.get("outcome_issues", {}).values(),
+            accepted=assessment.get("accepted") if general else None,
+            tracked=bool(general)
+            or state.get("execution_version", 2 if feature and feature.parent_id else 1) == 1
+            or state.get("outcome_tracking") == 1,
+            pending=bool(values["approvals"]),
+        )
+        return Run(**values)
 
     async def locked(self, db, run_id):
         row = await db.scalar(select(RunRow).where(RunRow.id == run_id).with_for_update())
@@ -121,11 +144,18 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
         exists = await db.scalar(select(EventRow.id).where(EventRow.run_id == row.id, EventRow.dedupe == key))
         if exists is not None:
             return
+        if kind.startswith("run."):
+            public = await self.public(db, row)
+            data = {**(data or {}), "outcome": public.outcome, "outcome_reason": public.outcome_reason}
         db.add(EventRow(run_id=row.id, id=row.next_event, dedupe=key, type=kind, data=data or {}))
         row.next_event += 1
         await db.flush()
 
     async def submit(self, body: RunCreate, key: str):
+        submission = body.model_dump()
+        if submission.get("task") and submission["task"].get("result_contract") is None:
+            # Preserve pre-contract request fingerprints when the opt-in field is absent.
+            submission["task"].pop("result_contract", None)
         fingerprint = hashlib.sha256(
             body.model_dump_json(
                 exclude={"general", "task", "workspace"}
@@ -140,7 +170,7 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
                 if existing.config.get("general"):
                     from .project_store import digest
 
-                    fingerprint = digest({"fingerprint_version": 3, **body.model_dump()})
+                    fingerprint = digest({"fingerprint_version": 3, **submission})
                 elif body.task is not None or body.workspace is not None:
                     raise Problem(409, "Idempotency key reused with different input")
                 if existing.fingerprint != fingerprint:
@@ -152,7 +182,7 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
             if agent.config.get("general"):
                 from .project_store import digest
 
-                fingerprint = digest({"fingerprint_version": 3, **body.model_dump()})
+                fingerprint = digest({"fingerprint_version": 3, **submission})
             elif body.task is not None or body.workspace is not None:
                 raise Problem(422, "V3 inputs require a general agent")
             registration = self.selection(AgentConfig.model_validate(agent.config))
@@ -179,13 +209,15 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
                 session = SessionRow(id=str(uuid4()))
                 db.add(session)
                 await db.flush()
+            requested = AgentConfig.model_validate(agent.config)
+            effective, adaptive = await self.size_task(db, requested, body, registration)
             row = RunRow(
                 id=str(uuid4()),
                 session_id=session.id,
                 agent_id=agent.id,
                 key=key,
                 fingerprint=fingerprint,
-                config=agent.config,
+                config=effective.model_dump(),
                 input=body.input,
                 registration_id=registration.identity,
                 approval_wait_seconds=self.approval_wait_seconds,
@@ -193,21 +225,20 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
             db.add(row)
             await db.flush()
             if agent.config.get("general"):
-                await self.initialize_general(db, row, AgentConfig.model_validate(agent.config), body)
+                await self.initialize_general(db, row, effective, body)
             else:
-                await self.initialize_toolkit(
-                    db, row, AgentConfig.model_validate(agent.config), body.artifact_ids
-                )
+                await self.initialize_toolkit(db, row, effective, body.artifact_ids)
+            await self.pin_adaptive(db, row, adaptive)
             await self.emit(db, row, "created", "run.queued")
             db.add(OutboxRow(id=f"start:{row.id}", run_id=row.id, kind="start"))
-            return self.public(row)
+            return await self.public(db, row)
 
     async def get(self, run_id):
         async with self.database.sessions() as db:
             row = await db.get(RunRow, run_id)
             if row is None:
                 raise Problem(404, "Run not found")
-            public = self.public(row)
+            public = await self.public(db, row)
         general = await self.general(run_id)
         if general:
             public.execution_version = 3
@@ -347,6 +378,14 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
                     select(SessionRow).where(SessionRow.id == row.session_id).with_for_update()
                 )
                 session.history = history or []
+            if feature and feature.parent_id and status != "completed":
+                rf.state = {
+                    **rf.state,
+                    "outcome_issues": {
+                        **rf.state.get("outcome_issues", {}),
+                        "child:" + run_id: "child_failed",
+                    },
+                }
             await self.emit(db, row, "terminal", f"run.{status}", {"error": error} if error else {})
             if feature and feature.parent_id:
                 rf.state = {
@@ -396,7 +435,7 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
                     target.status, target.approvals = "cancelled", []
                     await self.emit(db, target, "terminal", "run.cancelled")
                     db.add(OutboxRow(id=f"cancel:{target.id}", run_id=target.id, kind="cancel"))
-            return self.public(row)
+            return await self.public(db, row)
 
     async def awaiting(self, run_id, approvals):
         async with self.database.sessions.begin() as db:
@@ -445,7 +484,7 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
             if old is not None:
                 if old != approved:
                     raise Problem(409, "Approval decision is immutable")
-                return self.public(row)
+                return await self.public(db, row)
             if row.status != "awaiting_approval" or approval_id not in {a["id"] for a in row.approvals}:
                 raise Problem(409, "Approval is not pending")
             row.decisions = {**row.decisions, approval_id: approved}
@@ -469,7 +508,7 @@ class Store(GeneralActions, GeneralStore, ToolkitStore):
                     payload={"id": origin_call_id, "approved": approved},
                 )
             )
-            return self.public(row)
+            return await self.public(db, row)
 
     async def resumed(self, run_id):
         async with self.database.sessions.begin() as db:

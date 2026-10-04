@@ -193,6 +193,7 @@ class ToolkitWorkflow:
             if isinstance(cause, ApplicationError) and cause.message in {
                 "budget_exhausted",
                 "context_limit",
+                "output_limit",
                 "model_execution_failed",
                 "delegation_failed",
             }:

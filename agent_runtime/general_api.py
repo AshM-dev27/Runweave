@@ -7,11 +7,13 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from .evidence import AcceptanceBundle, build_evidence_bundle
 from .general_contracts import (
     CapabilityDescriptor,
     CapabilityPage,
     OperationPage,
     ProjectManifest,
+    ReconciliationRequest,
     ResourceUpdate,
     TaskSnapshot,
     VerificationPage,
@@ -53,6 +55,24 @@ def routes(app, store):
         idempotency_key: Annotated[str, Header(min_length=1, max_length=128)],
     ):
         return await store.update_resources(run_id, body, idempotency_key)
+
+    @app.get("/v1/runs/{run_id}/recovery")
+    async def recovery(
+        run_id: str, cursor: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=100)] = 100
+    ):
+        return await store.recovery(run_id, cursor, limit)
+
+    @app.get("/v1/runs/{run_id}/reconciliations/{identity}")
+    async def reconciliation(run_id: str, identity: str):
+        return await store.reconciliation_get(run_id, identity)
+
+    @app.post("/v1/runs/{run_id}/reconciliations", status_code=202)
+    async def reconcile(
+        run_id: str,
+        body: ReconciliationRequest,
+        idempotency_key: Annotated[str, Header(min_length=1, max_length=128)],
+    ):
+        return await store.reconciliation_submit(run_id, body, idempotency_key)
 
     @app.get("/v1/skills")
     async def installed_skills():
@@ -118,6 +138,13 @@ def routes(app, store):
     @app.get("/v1/workspaces/{workspace_id}/revisions/{revision_id}/download")
     async def download(workspace_id: str, revision_id: str):
         return binary(await store.workspace_get(workspace_id, revision_id, archive=True), "application/zip")
+
+    @app.get("/v1/runs/{run_id}/evidence", response_model=AcceptanceBundle)
+    async def evidence(run_id: str, response: Response):
+        bundle = await build_evidence_bundle(store, run_id)
+        response.headers["ETag"] = '"' + bundle.sha256 + '"'
+        response.headers["Cache-Control"] = "no-store"
+        return bundle
 
     @app.get("/v1/runs/{run_id}/task", response_model=TaskSnapshot)
     async def task(run_id: str):

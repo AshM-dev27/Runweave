@@ -1,0 +1,57 @@
+# Disposable services for the integration suite. Requires unused ports 5432, 7233, 8001 and 18091.
+# This stack has separate volumes and never reads application/provider credential files.
+name: runweave-tests
+services:
+  postgres:
+    image: postgres:17.6
+    environment:
+      POSTGRES_USER: agents
+      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_DB: agents
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agents"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: agents
+      POSTGRES_PWD: local-development-only
+      POSTGRES_SEEDS: postgres
+    ports: ["127.0.0.1:7233:7233"]
+  mcp:
+    build: .
+    command: ["uv", "run", "--frozen", "--no-dev", "python", "-m", "agent_runtime.mcp_server"]
+    ports: ["127.0.0.1:8001:8001"]
+  sandbox-image:
+    image: agent-runtime-sandbox:v1
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.job
+    profiles: [build]
+  sandbox-broker:
+    container_name: runweave-test-sandbox-broker
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.broker
+    environment:
+      SANDBOX_BROKER_KEY: v3-isolated-test-only
+    ports: ["127.0.0.1:18091:8090"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sandbox-state:/state
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8090/jobs/' + '0' * 64, headers={'Authorization': 'Bearer v3-isolated-test-only'}), timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  postgres-data:
+  sandbox-state:

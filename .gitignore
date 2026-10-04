@@ -1,13 +1,40 @@
+# Credentials and local tooling
 .env
 .env.*
 !.env.example
+.codex/
+.agents/
+
+# Python tooling
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
-.codex/
+build/
+dist/
+*.egg-info/
 
-var/acceptance/
+# Runtime state, private benchmark evidence and generated output
+var/
+output/
+sandbox/state/
+*.log
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# Historical local reports (fixtures under docs/fixtures remain versioned)
+/docs/acceptance*.json
+/docs/*results*.json
+/docs/toolkit-deployment.json
+/docs/openapi.json
+/docs/*-downloads/
+/docs/*-2026-*.md
+/docs/assets/
+/developer_tools/
+.DS_Store

@@ -147,7 +147,7 @@ async def test_clean_truncated_stream_replays_remaining_events(store):
 
     run = await make_run(store)
     await store.awaiting(run.id, [{"id": "call", "tool": "record_note", "arguments": {"text": "test"}}])
-    await store.finish(run.id, "completed", "done")
+    await store.finish(run.id, "completed", {"answer": "done"})
     events = await store.events(run.id)
     cursors = []
 
