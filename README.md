@@ -8,12 +8,17 @@ Use it for workflows such as invoice reconciliation, support actions that need a
 
 ## What you get
 
-- **One task call:** submit inputs and files with `client.run()`, then receive an answer, output files, or an approval/resource decision.
-- **Durable execution:** persisted sessions, ordered events, retry-safe submission, cancellation, and recovery through Temporal.
-- **Explicit control:** tool grants, human approval for configured actions, shared resource budgets, and scoped delegation.
-- **Checkable results:** exact-text or JSON Schema contracts, verification receipts, and exportable acceptance evidence.
-- **Extensible tools:** built-in file/project tools, operator-installed HTTP MCP servers, skills, and optional Browser Use Cloud.
-- **Model choice:** registered OpenAI and Anthropic adapters, plus a scripted fake provider for unpaid tests. Credentials stay on the worker.
+- **One task call:** submit inputs and files with `client.run()`, then receive an answer, output files, or an explicit approval/resource decision. Python, HTTP, and CLI interfaces use the same run lifecycle.
+- **Durable execution:** persistent sessions, replayable SSE progress events, retry-safe submission, cancellation, and recovery after worker restarts. Runs retain their configuration and policy snapshots.
+- **Adaptive budgets:** automatically size work and output allowances from the request and observed demand, within caller, model, and operator ceilings. Hard limits return an explicit pause or failure. See [resource controls](docs/resource-policy.md).
+- **Action controls:** authorized tools, file scopes, and human approvals with exact arguments and receipt-backed previews. Decisions remain explicit; see [outcome handling](docs/usage.md#handle-the-outcome).
+- **Scoped delegation and sandboxing:** child agents share resource limits and receive bounded file/tool grants. Project commands run in isolated containers; results are integrated and verified. See [workspaces and delegation](docs/usage.md#workspaces-artifacts-and-inspection).
+- **Checkable results:** exact-text or JSON Schema contracts, revision-bound verification receipts, batched checks, optional semantic completion review, and exportable evidence with offline verification. See [result contracts](docs/acceptance-contracts.md) and [completion checks](docs/harness-foundations.md#completion).
+- **Context and continuation:** bounded conversation memory, retrieval of earlier session messages, and receipt-derived progress guidance to help agents use existing observations and avoid repeated reads. See [context and sessions](docs/harness-foundations.md#context-and-sessions).
+- **External-effect recovery:** durable operation identities and receipts support safe retries or reconciliation. Unresolved writes block completion; operators can reconcile eligible effects and uncertain model usage. See [operator recovery](docs/operator-recovery.md).
+- **Extensible capabilities:** built-in file/project tools, operator-installed HTTP MCP tools and skills, plus versioned context and execution interfaces. See [tools and extensions](docs/harness-foundations.md).
+- **Hosted browsing:** optional Browser Use Cloud tasks with explicit approval, a $1 cap per hosted task, validated structured results, and cancellation/cleanup. See [browser integration](docs/browser-use.md).
+- **Model choice:** registered OpenAI and Anthropic adapters, OpenAI-compatible Chat Completions, registry-configured OpenAI reasoning effort, and a scripted fake provider for unpaid tests. Provider credentials belong in the worker environment; see [provider setup](docs/operations.md#providers-and-configuration).
 
 Development preview: the current scope is one authenticated workspace. Multi-tenancy and automatic model routing are not implemented. Review [validation and limitations](docs/validation-index.md) before deploying; acceptance checks do not guarantee factual correctness.
 
