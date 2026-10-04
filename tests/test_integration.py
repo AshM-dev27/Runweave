@@ -223,7 +223,8 @@ async def wait_round(store, run_id, call_id):
     async with asyncio.timeout(30):
         while True:
             run = await store.get(run_id)
-            if run.status == "awaiting_approval" and run.approvals[0].id == call_id:
+            # Decided approvals disappear before the worker advances the run status.
+            if run.status == "awaiting_approval" and run.approvals and run.approvals[0].id == call_id:
                 return run
             assert run.status not in {"completed", "failed", "cancelled"}, run.error
             await asyncio.sleep(0.05)
