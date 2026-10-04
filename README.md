@@ -73,7 +73,15 @@ uv run --env-file .env.local python -m agent_runtime.cli run AGENT_ID "Your task
 uv run --env-file .env.local python -m agent_runtime.cli result RUN_ID
 ```
 
+### Task lifecycle
+
+![Runweave task lifecycle: submit and persist a task, decide from current context, check tool grants and budgets, execute activities, validate results, and return an explicit outcome. The durable loop repeats within budget; approvals, uncertain effects, and cancellation have explicit controls.](docs/assets/runweave-task-lifecycle.png)
+
+The diagram shows the conceptual success path. General tasks repeat the decision and execution loop until they pass acceptance checks or reach a stop condition; optional contracts and review apply when configured.
+
 ## How it runs
+
+![Runweave architecture: the Python client, HTTP, or CLI calls FastAPI; PostgreSQL stores runs, events, receipts, and the outbox; the worker dispatcher starts Temporal workflows, which schedule model and tool activities. PydanticAI connects model providers, tool adapters connect external services, and a trusted sandbox broker controls isolated Docker jobs.](docs/assets/runweave-architecture.png)
 
 FastAPI exposes the public API. PostgreSQL stores runs and ordered events; a transactional outbox dispatches Temporal workflows. Workflows coordinate model and tool activities through private PydanticAI adapters. Project commands execute in isolated containers through the sandbox broker. Public schemas remain independent of these execution frameworks.
 
