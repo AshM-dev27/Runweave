@@ -28,8 +28,6 @@ def classify(status, *, error=None, denied=False, issues=(), accepted=None, trac
     # A completion assessment cannot override the user's recorded refusal.
     if denied or error == "tool_denied":
         return "blocked", "approval_denied"
-    if status == "completed" and accepted is True:
-        return "succeeded", None
     if error == "artifact_not_authorized" or "artifact_not_authorized" in issues:
         return "blocked", "artifact_not_authorized"
     if error == "task_blocked":
@@ -40,6 +38,8 @@ def classify(status, *, error=None, denied=False, issues=(), accepted=None, trac
         return "needs_attention", "child_failed"
     if issues:
         return "needs_attention", "tool_error"
+    if status == "completed" and accepted is True:
+        return "succeeded", None
     if not tracked or accepted is False:
         return "needs_attention", "outcome_unavailable"
     return "succeeded", None

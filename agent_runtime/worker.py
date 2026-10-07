@@ -9,7 +9,12 @@ from .activities import ACTIVITIES
 from .config import settings
 from .dispatch import Dispatcher
 from .general_runtime import GENERAL_ACTIVITIES
-from .general_workflow import ExtensionCleanupWorkflow, GeneralWorkflow, ReconciliationWorkflow
+from .general_workflow import (
+    ComputerCleanupWorkflow,
+    ExtensionCleanupWorkflow,
+    GeneralWorkflow,
+    ReconciliationWorkflow,
+)
 from .runtime import get_store
 from .telemetry import configure, configure_logging
 from .toolkit_runtime import toolkit_child, toolkit_state, toolkit_step, toolkit_tool
@@ -50,7 +55,12 @@ async def main():
                 client,
                 task_queue=config.task_queue + "-v3",
                 max_heartbeat_throttle_interval=timedelta(seconds=2),
-                workflows=[GeneralWorkflow, ReconciliationWorkflow, ExtensionCleanupWorkflow],
+                workflows=[
+                    GeneralWorkflow,
+                    ReconciliationWorkflow,
+                    ExtensionCleanupWorkflow,
+                    ComputerCleanupWorkflow,
+                ],
                 activities=GENERAL_ACTIVITIES,
             ),
         ):

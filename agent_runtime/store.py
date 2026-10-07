@@ -4,6 +4,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 
 from .adaptive_store import AdaptiveStore
+from .computer_store import ComputerStore
 from .config import settings
 from .db import (
     AgentRow,
@@ -31,7 +32,7 @@ class Problem(Exception):
         self.status, self.detail = status, detail
 
 
-class Store(AdaptiveStore, GeneralActions, GeneralStore, ToolkitStore):
+class Store(ComputerStore, AdaptiveStore, GeneralActions, GeneralStore, ToolkitStore):
     def __init__(
         self,
         database,
@@ -42,10 +43,19 @@ class Store(AdaptiveStore, GeneralActions, GeneralStore, ToolkitStore):
         extensions=None,
         context_policies=None,
         executors=None,
+        blobs=None,
     ):
         self.database, self.max_active = database, max_active
         self.registry = registry or load_registry()
         self.tools = ToolRegistry()
+        from .blob_storage import FileBlobStorage
+
+        self.blobs = blobs or (
+            FileBlobStorage(settings().artifact_storage_path) if settings().artifact_storage_path else None
+        )
+        self.artifact_max_bytes = settings().artifact_max_bytes
+        self.artifact_storage_bytes = settings().artifact_storage_bytes
+        self.artifact_run_bytes = settings().artifact_run_bytes
         from .context import ContextPolicies
         from .executors import ExecutionBackends
         from .extensions import ExtensionRegistry
@@ -110,7 +120,7 @@ class Store(AdaptiveStore, GeneralActions, GeneralStore, ToolkitStore):
 
     @staticmethod
     async def public(db, row):
-        from .general_db import GeneralRunRow
+        from .general_db import GeneralOperationRow, GeneralRunRow
         from .task_outcomes import classify
 
         feature = await db.get(ToolkitRunRow, row.id)
@@ -121,11 +131,32 @@ class Store(AdaptiveStore, GeneralActions, GeneralStore, ToolkitStore):
         # Decisions commit before the worker consumes its signal. Only pending
         # approvals are actionable during that durable handoff window.
         values["approvals"] = [a for a in row.approvals if a["id"] not in row.decisions]
+        issues = list(state.get("outcome_issues", {}).values())
+        if general and row.status == "completed":
+            # A model's completion assessment is not reconciliation of a failed tool.
+            # Read current durable receipts so historical runs and successful recovery
+            # of the same operation get the same outcome as newly completed runs.
+            run_ids = [row.id, *general.data.get("children", {})]
+            issues.extend(
+                await db.scalars(
+                    select(GeneralOperationRow.data["result"]["error"].as_string()).where(
+                        GeneralOperationRow.run_id.in_(run_ids),
+                        GeneralOperationRow.data["decision"]["action"]["kind"].as_string() == "invoke",
+                        GeneralOperationRow.data["result"]["error"].as_string().is_not(None),
+                    )
+                )
+            )
+            if len(run_ids) > 1 and await db.scalar(
+                select(RunRow.id)
+                .where(RunRow.id.in_(run_ids[1:]), RunRow.status.in_(["failed", "cancelled"]))
+                .limit(1)
+            ):
+                issues.append("child_failed")
         values["outcome"], values["outcome_reason"] = classify(
             row.status,
             error=row.error,
             denied=any(value is False for value in row.decisions.values()) or state.get("denied", False),
-            issues=state.get("outcome_issues", {}).values(),
+            issues=issues,
             accepted=assessment.get("accepted") if general else None,
             tracked=bool(general)
             or state.get("execution_version", 2 if feature and feature.parent_id else 1) == 1
@@ -243,6 +274,8 @@ class Store(AdaptiveStore, GeneralActions, GeneralStore, ToolkitStore):
         if general:
             public.execution_version = 3
             public.artifact_ids = general["artifact_ids"]
+            async with self.database.sessions() as db:
+                public.artifacts = await self.artifact_refs_locked(db, run_id, outputs_only=True)
             public.root_run_id = general["root_id"]
             public.parent_run_id = general["parent_id"]
             public.depth = int(bool(general["parent_id"]))

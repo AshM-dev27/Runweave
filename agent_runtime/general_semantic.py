@@ -496,6 +496,16 @@ async def capture(store, db, gr, root, op_id, version=2):
             },
             evidence=evidence,
             files=files,
+            artifacts=[
+                ref.model_dump(mode="json") for ref in await store.artifact_refs_locked(db, gr.run_id)
+            ],
+            computers=await store.computer_context_locked(db, gr.run_id)
+            if gr.parent_id is None
+            and any(
+                entry.get("extension", {}).get("handler") == "e2b.session.python.v1"
+                for entry in gr.data["tools"].values()
+            )
+            else [],
             grants=grants,
             children=children,
             delegation=gr.data["policy"].get("delegation"),
@@ -586,6 +596,8 @@ def project_context(binding, prompt, previous_turns, report_only):
             for s, c in binding["checks"].items()
         },
         files=list(binding["files"]),
+        artifacts=binding.get("artifacts", []),
+        computers=binding.get("computers", []),
         grants=binding["grants"],
         children={
             selector: {

@@ -4,6 +4,8 @@ Recovery resolves uncertain accounting and external effects on a stopped run tre
 
 ## Inspect and submit
 
+Stopped deferred tools support `kind: "tool_cleanup"` with their operation ID. This calls only cleanup with saved state and cannot execute a new job. Unknown E2B acquisition remains unresolved if metadata lookup is empty/ambiguous. After independently confirming resources are gone, an operator can use `kind: "tool_cleanup_attestation"` with a required audit `evidence_ref`. The receipt identifies attestation, does not claim provider confirmation or task success, and releases held provider capacity. See [production recovery](production.md#monitoring-and-recovery).
+
 ```python
 state = await client.recovery(run_id)
 # state: terminal_tree, unresolved, next_cursor, reconciliations

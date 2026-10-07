@@ -6,9 +6,10 @@ No request can import code, choose an endpoint, or enlarge an execution grant.
 import importlib
 import json
 import os
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Literal, Protocol
+from typing import AsyncIterator, Awaitable, Callable, Literal, Protocol
 from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
@@ -17,6 +18,7 @@ from pydantic import Field, model_validator
 from .approval_preview import ApprovalPresentation
 from .general_contracts import Contract, EffectPolicy
 from .project_store import digest
+from .tool_contracts import ArtifactRef
 
 
 class ToolDefinition(Contract):
@@ -29,6 +31,8 @@ class ToolDefinition(Contract):
     config: dict = Field(default_factory=dict)
     max_result_bytes: int = Field(default=16384, ge=256, le=32768)
     reconciliation: Literal["retry", "lookup"] = "retry"
+    execution_mode: Literal["sync", "deferred"] = "sync"
+    max_concurrency: int | None = Field(default=None, strict=True, ge=1, le=64)
     approval_presentation: ApprovalPresentation | None = None
 
     @model_validator(mode="after")
@@ -50,8 +54,14 @@ class ToolDefinition(Contract):
         if self.arguments_schema.get("type") != "object":
             raise ValueError("Tool arguments must be an object")
         # These extension effects are never represented as local database transactions.
-        if self.effect.kind not in {"read", "external-write"}:
-            raise ValueError("Extensions support read or external-write effects")
+        if self.effect.kind not in {"read", "external-write", "isolated-command"}:
+            raise ValueError("Extensions support read, external-write or isolated-command effects")
+        if self.effect.kind == "isolated-command" and (
+            self.handler not in {"e2b.python.v1", "e2b.python.v2", "e2b.session.python.v1"}
+            or self.effect.retry_safety != "reconcile"
+            or self.effect.approval != "none"
+        ):
+            raise ValueError("Isolated extensions require the bounded E2B Python handler")
         if self.effect.kind == "read" and self.effect.retry_safety != "read":
             raise ValueError("Read tools require read retry safety")
         if self.effect.kind == "external-write" and (
@@ -98,6 +108,16 @@ class DeferredToolResult:
     retry_after: int = 2
 
 
+def deferred_handler(definition):
+    # Retain Browser Use behavior for registrations pinned before execution_mode existed.
+    return definition.get("execution_mode") == "deferred" or definition.get("handler") == "browser_use.v4"
+
+
+def capacity_handler(handler):
+    # Both Python schemas consume the same provider quota, including pinned v1 runs.
+    return "e2b.python.v1" if handler in {"e2b.python.v2", "e2b.session.python.v1"} else handler
+
+
 @dataclass(frozen=True)
 class ToolCall:
     run_id: str
@@ -107,10 +127,32 @@ class ToolCall:
     state: dict = field(default_factory=dict)
     remaining_seconds: float | None = None
     save_state: Callable[[dict], Awaitable[None]] | None = None
+    artifacts: "ToolArtifacts | None" = None
+    computers: "ToolComputers | None" = None
 
     @property
     def idempotency_key(self):
         return self.operation_id
+
+
+class ToolArtifacts(Protocol):
+    async def resolve(self, artifact_id: str) -> ArtifactRef: ...
+    async def published(self, slot: str) -> ArtifactRef | None: ...
+    def file(self, artifact_id: str) -> AbstractAsyncContextManager[tuple[ArtifactRef, Path]]: ...
+    async def publish(
+        self, slot: str, chunks: AsyncIterator[bytes], media_type: str, filename: str
+    ) -> ArtifactRef: ...
+
+
+class ToolComputers(Protocol):
+    async def claim(self, name: str, definition: dict, config, *, provider: str) -> dict: ...
+    async def begin_create(self, computer_id: str) -> bool: ...
+    async def acquired(self, computer_id: str, sandbox_id: str) -> None: ...
+    async def current(self, computer_id: str) -> dict: ...
+    async def ready(self, computer_id: str, idle_seconds: int, state: dict) -> dict: ...
+    async def close(self, computer_id: str) -> bool: ...
+    async def owned(self, name: str) -> dict | None: ...
+    async def reject_create(self, computer_id: str) -> None: ...
 
 
 class ToolHandler(Protocol):
@@ -197,14 +239,50 @@ class ExtensionRegistry:
 
         if any(t.alias in CATALOG for t in manifest.tools):
             raise ValueError("Extensions cannot replace built-in capabilities")
+        from .artifact_store import READ_SCHEMA, ArtifactReadHandler
         from .browser_use import ARGUMENTS_SCHEMA, BrowserUseConfig, BrowserUseHandler
+        from .e2b import E2B_ARGUMENTS_SCHEMA, E2BConfig, E2BHandler
+        from .e2b_artifacts import ARGUMENTS_SCHEMA as E2B_ARTIFACT_SCHEMA
+        from .e2b_artifacts import E2BArtifactConfig, E2BArtifactHandler
+        from .e2b_sessions import ARGUMENTS_SCHEMA as E2B_SESSION_SCHEMA
+        from .e2b_sessions import E2BSessionConfig, E2BSessionHandler
 
-        self.handlers = {"mcp.http": MCPHandler(), "browser_use.v4": BrowserUseHandler(), **(handlers or {})}
+        self.handlers = {
+            "mcp.http": MCPHandler(),
+            "browser_use.v4": BrowserUseHandler(),
+            "e2b.python.v1": E2BHandler(),
+            "e2b.python.v2": E2BArtifactHandler(),
+            "e2b.session.python.v1": E2BSessionHandler(),
+            "artifacts.read.v1": ArtifactReadHandler(),
+            **(handlers or {}),
+        }
         self.tools, self.skills = {}, {}
         for definition in manifest.tools:
             if definition.alias in self.tools:
                 raise ValueError("Duplicate extension alias")
             no_inline_secrets(definition.config)
+            if definition.handler == "artifacts.read.v1" and (
+                definition.arguments_schema != READ_SCHEMA or definition.effect.kind != "read"
+            ):
+                raise ValueError("Artifact reads require the fixed bounded read schema")
+            if definition.handler in {"e2b.python.v1", "e2b.python.v2", "e2b.session.python.v1"}:
+                config_type, schema = (
+                    (E2BConfig, E2B_ARGUMENTS_SCHEMA)
+                    if definition.handler == "e2b.python.v1"
+                    else (E2BArtifactConfig, E2B_ARTIFACT_SCHEMA)
+                )
+                if definition.handler == "e2b.session.python.v1":
+                    config_type, schema = E2BSessionConfig, E2B_SESSION_SCHEMA
+                config_type.model_validate(definition.config)
+                if (
+                    definition.arguments_schema != schema
+                    or definition.effect.kind != "isolated-command"
+                    or definition.execution_mode != "deferred"
+                    or definition.reconciliation != "retry"
+                    or definition.max_concurrency is None
+                    or definition.max_result_bytes < 16384
+                ):
+                    raise ValueError("E2B requires the fixed isolated Python schema and deferred execution")
             if definition.handler == "browser_use.v4":
                 BrowserUseConfig.model_validate(definition.config)
                 if (
@@ -240,6 +318,10 @@ class ExtensionRegistry:
                 getattr(handler, "reconcile", None)
             ):
                 raise ValueError("External write handler requires reconciliation")
+            if deferred_handler(definition.model_dump()) and any(
+                not callable(getattr(handler, method, None)) for method in ("reconcile", "cleanup")
+            ):
+                raise ValueError("Deferred handlers require reconciliation and cleanup")
             entry = definition.model_dump()
             self.tools[definition.alias] = {**entry, "registration_id": digest(entry)}
         for definition in manifest.skills:
@@ -305,9 +387,21 @@ class ExtensionRegistry:
     def validate_arguments(entry, arguments):
         if list(Draft202012Validator(entry["arguments_schema"]).iter_errors(arguments)):
             raise ValueError("invalid_extension_arguments")
+        if entry.get("extension", {}).get("handler") == "e2b.python.v1":
+            from .e2b import validate_job
+
+            validate_job(arguments)
+        elif entry.get("extension", {}).get("handler") == "e2b.python.v2":
+            from .e2b_artifacts import validate_job
+
+            validate_job(arguments)
+        elif entry.get("extension", {}).get("handler") == "e2b.session.python.v1":
+            from .e2b_sessions import E2BSessionHandler
+
+            E2BSessionHandler.validate(arguments)
 
     @staticmethod
-    def result(definition, value):
+    def redact(definition, value):
         if not isinstance(value, dict):
             raise ValueError("invalid_extension_result")
         encoded = json.dumps(value, allow_nan=False, ensure_ascii=False)
@@ -320,6 +414,11 @@ class ExtensionRegistry:
             secret = os.environ.get(reference)
             if secret:
                 encoded = encoded.replace(json.dumps(secret, ensure_ascii=False)[1:-1], "[REDACTED]")
-        if len(encoded.encode()) > definition["max_result_bytes"]:
+        return json.loads(encoded)
+
+    @staticmethod
+    def result(definition, value):
+        value = ExtensionRegistry.redact(definition, value)
+        if len(json.dumps(value, ensure_ascii=False).encode()) > definition["max_result_bytes"]:
             raise ValueError("extension_result_limit")
-        return {"output": json.loads(encoded), "untrusted": True}
+        return {"output": value, "untrusted": True}

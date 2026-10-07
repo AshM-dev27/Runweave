@@ -120,9 +120,9 @@ async def test_run_returns_exact_approval_without_deciding(store):
 
 
 @pytest.mark.parametrize(
-    "reason,limit_type", [("capacity", "budget"), ("limit", "budget"), ("limit", "ceiling")]
+    "reason,limit_type", [("capacity", "budget"), (None, "budget"), ("limit", "budget"), ("limit", "ceiling")]
 )
-async def test_run_capacity_waits_but_budget_and_ceiling_return_attention(store, reason, limit_type):
+async def test_run_capacity_or_resumed_pause_waits_but_limits_return_attention(store, reason, limit_type):
     agent = await setup(store)
     from agent_runtime.schemas import RunCreate
 
@@ -130,7 +130,8 @@ async def test_run_capacity_waits_but_budget_and_ceiling_return_attention(store,
     reads, writes = [], []
     resource = {
         "version": 1,
-        "pause": {"block": {"reason": reason, "limit_type": limit_type}},
+        # A capacity pause can clear between the run read and the resource read.
+        "pause": {"block": {"reason": reason, "limit_type": limit_type}} if reason else None,
         "limits": {"model_attempts": 3},
     }
 
@@ -141,13 +142,13 @@ async def test_run_capacity_waits_but_budget_and_ceiling_return_attention(store,
             return httpx.Response(200, json=resource)
         reads.append(request.url.path)
         state = run.model_dump(mode="json")
-        state["status"] = "completed" if reason == "capacity" and len(reads) > 1 else "paused_budget"
+        state["status"] = "completed" if reason in {"capacity", None} and len(reads) > 1 else "paused_budget"
         return httpx.Response(200, json=state)
 
     async with transport_client(handle) as http:
         result = await Client(http_client=http).result(run.id)
     assert not writes
-    if reason == "capacity":
+    if reason in {"capacity", None}:
         assert result.status == "completed" and len(reads) == 2
     else:
         assert result.status == "paused_budget" and result.resources == resource
@@ -183,7 +184,9 @@ async def test_files_preflight_before_any_network(failure, tmp_path):
     bad = tmp_path / "bad.txt"
     paths = [valid, bad]
     if failure == "oversize":
-        bad.write_bytes(b"x" * 262145)
+        from agent_runtime.artifacts import MAX_ARTIFACT
+
+        bad.write_bytes(b"x" * (MAX_ARTIFACT + 1))
     elif failure == "invalid_json":
         bad = tmp_path / "bad.json"
         bad.write_text("not JSON")
@@ -191,7 +194,7 @@ async def test_files_preflight_before_any_network(failure, tmp_path):
     elif failure == "symlink":
         bad.symlink_to(valid)
     elif failure == "unsupported":
-        paths[1] = tmp_path / "file.pdf"
+        paths[1] = tmp_path / "file.exe"
     elif failure == "too_many":
         paths = [valid] * 9
     elif failure == "directory":

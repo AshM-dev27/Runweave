@@ -13,9 +13,15 @@ uv run ruff format --check .
 uv run pytest -q
 ```
 
-The default suite uses fake models and temporary databases. Integration and live tests are skipped unless explicitly enabled. No provider key is required; the test fixture disables model requests and removes Browser Use credentials for tests without the `live` marker. CI runs these same checks.
+The default suite uses fake models and temporary databases. Integration and live tests are skipped unless explicitly enabled. No provider key is required; the test fixture disables model requests and removes Browser Use and E2B credentials for tests without the `live` marker. CI runs these same checks.
 
 ## Service integration tests
+
+Reusable-computer checks live in `tests/test_computer_sessions.py` and `tests/test_computer_sessions_integration.py`. They cover conversation ownership, exclusive use, continuation across tasks, retained shared capacity, lost acquisition/command/completion responses, cancellation, explicit close, idle expiry after worker replacement and workflow replay. Models and computers are fake. Warm reuse does not imply a persistent interpreter, pause/resume, desktop control, measured throughput or live-model correctness.
+
+E2B credentials are also removed by default tests. E2B service tests cover concurrent admission, worker replacement, workflow replay and a disposable PostgreSQL upgrade/restore drill. Set `TEST_POSTGRES_CONTAINER` to the disposable container name (`runweave-tests-postgres-1` in CI). See the [production profile](production.md) for what these checks establish and the deployment-specific checks still required.
+
+File execution checks live in `tests/test_artifact_files.py`, `tests/test_e2b_artifacts.py` and `tests/test_e2b_artifacts_integration.py`. They cover larger/binary transfers, immutable blob storage, format/size admission, missing/corrupt storage, local upload snapshots on retries, run-scoped reads, duplicate-publication recovery, partial outputs, cancellation fencing, shared admission across the two E2B schemas, replacement workers and Temporal replay. Computer outputs and model decisions are fake; these checks do not establish PDF/XLSX parser availability, live-model business accuracy, hosted-provider throughput or shared-filesystem disaster recovery.
 
 Use a **disposable checkout** and the isolated [test Compose stack](../compose.test.yaml). The [CI workflow](../.github/workflows/ci.yml) contains the complete build, image-pinning, startup, test and cleanup commands. It builds the toolkit and project images, sets the checkout's project-image digest, then starts PostgreSQL, Temporal, MCP and the test sandbox broker.
 
@@ -24,7 +30,9 @@ Ports 5432, 7233, 8001 and 18091 must be free. Do not run the test stack alongsi
 Once the test services are ready, run:
 
 ```bash
-TEST_PROJECT_BROKER_NAME=runweave-test-sandbox-broker uv run pytest -q --integration -m integration
+TEST_PROJECT_BROKER_NAME=runweave-test-sandbox-broker \
+TEST_POSTGRES_CONTAINER=runweave-tests-postgres-1 \
+uv run pytest -q --integration -m integration
 ```
 
 Tests use dedicated PostgreSQL schemas and Temporal queues. `TEST_DATABASE_URL` can select a separate PostgreSQL instance; the test account needs permission to create and drop schemas. Temporal is expected at `localhost:7233` and MCP at `localhost:8001`. The broker listens on port 18091 with the test credential supplied by the test Compose file. Some Docker tests invoke `sudo -n docker`.
@@ -42,6 +50,8 @@ uv run python -m scripts.showcase_benchmark
 It tests CRM import after a worker crash, approval denial, refund response loss, ineligible refunds, unknown-receipt recovery, supplier comparison and browser cancellation. The runtime, HTTP transport, persisted approvals, reconciliation and workflow replay are real. Agent decisions and upstream business services are deterministic simulations; Browser Use requests go to a local simulated service. The harness does not load dotenv files or call paid providers.
 
 Reports and generated fixtures are written under the ignored `var/benchmarks/` directory. The harness removes temporary services, database schemas and diagnostic logs. Its results measure these recovery scenarios, not live-model accuracy, hosted-browser latency or broad resistance to prompt injection.
+
+The [reusable-computer benchmark](computer-sessions.md#deployment-and-validation) explicitly opts into billable E2B compute with `--live`. Against an idle deployed workspace it checks synthetic multi-file reconciliation, continuation, payment replay, binary outputs, checkpoint recovery, quota/timeout failures and warm-computer admission. Planning is scripted and outputs are independently checked. `--restart-worker` additionally replaces the local Compose worker between tasks. It closes only benchmark-owned computers and stores private evidence under `var/benchmarks/`; it does not establish autonomous model accuracy or sustained capacity.
 
 ## Live evaluation: explicit opt-in
 

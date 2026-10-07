@@ -53,7 +53,7 @@ async def test_public_artifacts_and_pinned_registry(store):
         assert (
             await c.post(
                 "/v1/artifacts",
-                content=b"x" * 262145,
+                content=b"x" * (store.artifact_max_bytes + 1),
                 headers={"Idempotency-Key": "big", "Content-Type": "text/plain"},
             )
         ).status_code == 413

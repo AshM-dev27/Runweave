@@ -19,6 +19,7 @@ dependencies = [
     "sqlalchemy[asyncio]==2.0.52",
     "uvicorn[standard]==0.52.4",
     "browser-use-sdk==3.11.3",
+    "e2b==2.3.0",
 ]
 
 [project.urls]

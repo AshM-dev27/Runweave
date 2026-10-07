@@ -25,6 +25,28 @@ from .project_store import digest, fail
 
 
 def routes(app, store):
+    from .computer_contracts import ComputerCleanupAttestation, ComputerSession
+
+    @app.get("/v1/sessions/{session_id}/computers", response_model=list[ComputerSession])
+    async def computers(session_id: str, cursor: str = "", limit: Annotated[int, Query(ge=1, le=100)] = 100):
+        return await store.computer_sessions(session_id, cursor=cursor, limit=limit)
+
+    @app.get("/v1/computers/{computer_id}", response_model=ComputerSession)
+    async def computer(computer_id: str):
+        return await store.computer(computer_id)
+
+    @app.post("/v1/computers/{computer_id}/close", response_model=ComputerSession, status_code=202)
+    async def close_computer(computer_id: str):
+        return await store.computer_close(computer_id)
+
+    @app.post("/v1/computers/{computer_id}/cleanup-attestation", response_model=ComputerSession)
+    async def attest_computer(
+        computer_id: str,
+        body: ComputerCleanupAttestation,
+        idempotency_key: Annotated[str, Header(min_length=1, max_length=128)],
+    ):
+        return await store.computer_attest_cleanup(computer_id, body.evidence_ref, idempotency_key)
+
     original_openapi = app.openapi
 
     def openapi():
@@ -36,6 +58,12 @@ def routes(app, store):
         return schema
 
     app.openapi = openapi
+
+    @app.get("/v1/extensions/status")
+    async def extension_status():
+        from .extension_health import extension_status
+
+        return await extension_status(store)
 
     @app.get("/v1/capabilities", response_model=list[CapabilityDescriptor])
     async def installed_capabilities():

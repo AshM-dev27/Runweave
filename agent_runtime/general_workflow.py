@@ -228,3 +228,19 @@ class ExtensionCleanupWorkflow:
             if complete:
                 return
             await workflow.sleep(timedelta(seconds=min(30, 2 ** min(attempt + 1, 5)) if fast else 30))
+
+
+@workflow.defn
+class ComputerCleanupWorkflow:
+    @workflow.run
+    async def run(self, computer_id: str):
+        for attempt in range(16):
+            if await workflow.execute_activity(
+                "cleanup_computer",
+                computer_id,
+                start_to_close_timeout=timedelta(seconds=45),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            ):
+                return True
+            await workflow.sleep(timedelta(seconds=min(30, 2 ** min(attempt + 1, 5))))
+        return False  # The dispatcher rediscovers unresolved cleanup; capacity remains held.
