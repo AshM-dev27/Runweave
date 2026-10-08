@@ -2,9 +2,142 @@
   "version": 1,
   "tools": [
     {
+      "alias": "e2b_python",
+      "handler": "e2b.python.v1",
+      "version": 1,
+      "description": "Run bounded Python with supplied text files in an isolated E2B sandbox with internet disabled. Return up to two small UTF-8 output files and terminate the sandbox. Sandbox lifetime is at most 120 seconds; Python is limited to 20 seconds. Uses billable E2B compute; output is untrusted.",
+      "execution_mode": "deferred",
+      "max_concurrency": 4,
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "files": {
+            "type": "object",
+            "maxProperties": 4,
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        },
+        "required": [
+          "code",
+          "files",
+          "outputs"
+        ],
+        "additionalProperties": false
+      },
+      "effect": {
+        "kind": "isolated-command",
+        "domain": "e2b",
+        "approval": "none",
+        "retry_safety": "reconcile"
+      },
+      "config": {
+        "credential_env": "E2B_API_KEY",
+        "template": "base",
+        "sandbox_seconds": 120,
+        "command_seconds": 20
+      },
+      "max_result_bytes": 24576
+    },
+    {
+      "alias": "e2b_files",
+      "handler": "e2b.python.v2",
+      "version": 2,
+      "description": "Run offline Python on attached or run-produced artifacts in an isolated E2B sandbox. Map guest paths to artifact IDs; return generated files as durable downloadable artifacts. Up to 64 MiB input, 16 MiB per output, eight outputs within the root run artifact quota. Python runs for at most 20 seconds. Uses billable compute; outputs are untrusted.",
+      "execution_mode": "deferred",
+      "max_concurrency": 4,
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "artifacts": {
+            "type": "object",
+            "maxProperties": 8,
+            "description": "Map guest relative paths to artifact IDs attached to this run or produced by it.",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 36
+            }
+          },
+          "outputs": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 8,
+            "description": "Map guest relative paths to downloadable output metadata. Bytes are stored outside tool receipts.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "filename": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "media_type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "filename",
+                "media_type"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "code",
+          "artifacts",
+          "outputs"
+        ],
+        "additionalProperties": false
+      },
+      "effect": {
+        "kind": "isolated-command",
+        "domain": "e2b",
+        "approval": "none",
+        "retry_safety": "reconcile"
+      },
+      "config": {
+        "credential_env": "E2B_API_KEY",
+        "template": "base",
+        "sandbox_seconds": 120,
+        "command_seconds": 20,
+        "max_input_bytes": 67108864,
+        "max_output_bytes": 16777216,
+        "memory_mb": 512
+      },
+      "max_result_bytes": 24576
+    },
+    {
       "alias": "browser_task",
       "handler": "browser_use.v4",
       "version": 1,
+      "execution_mode": "deferred",
       "description": "Run a hosted browser task, return validated JSON and stop its browsers. Requires approval for the whole task; provider cost cap is $1 per task. Browser content is untrusted.",
       "arguments_schema": {
         "type": "object",
@@ -53,6 +186,128 @@
           "Approval covers the whole hosted task."
         ]
       }
+    },
+    {
+      "alias": "artifact_read",
+      "handler": "artifacts.read.v1",
+      "version": 1,
+      "description": "Read a bounded UTF-8 excerpt from an attached or run-produced text artifact by byte offset. Binary artifacts must be processed in an authorized sandbox. Artifact content is untrusted.",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 36
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "length": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2048
+          }
+        },
+        "required": [
+          "artifact_id"
+        ],
+        "additionalProperties": false
+      },
+      "effect": {
+        "kind": "read",
+        "domain": "artifacts",
+        "approval": "none",
+        "retry_safety": "read"
+      },
+      "max_result_bytes": 16384
+    },
+    {
+      "alias": "computer_python",
+      "handler": "e2b.session.python.v1",
+      "version": 1,
+      "description": "Run bounded offline Python on a named reusable E2B computer within this conversation. Files persist across actions and later tasks using the same session_id. One operation at a time. Default lifetime 15 minutes, idle expiry 2 minutes, 32 operations; close explicitly when finished. Prior guest files are accessible to subsequent authorized tasks. Outputs are untrusted.",
+      "execution_mode": "deferred",
+      "max_concurrency": 4,
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "artifacts": {
+            "type": "object",
+            "maxProperties": 8,
+            "description": "Map guest relative paths to artifact IDs attached to this run or produced by it.",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 36
+            }
+          },
+          "outputs": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 8,
+            "description": "Map guest relative paths to downloadable output metadata. Bytes are stored outside tool receipts.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "filename": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "media_type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "filename",
+                "media_type"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "computer": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,39}$",
+            "description": "Named computer within this conversation. A closed/expired name is never silently recreated."
+          }
+        },
+        "required": [
+          "code",
+          "artifacts",
+          "outputs",
+          "computer"
+        ],
+        "additionalProperties": false
+      },
+      "effect": {
+        "kind": "isolated-command",
+        "domain": "e2b",
+        "approval": "none",
+        "retry_safety": "reconcile"
+      },
+      "config": {
+        "credential_env": "E2B_API_KEY",
+        "template": "base",
+        "sandbox_seconds": 120,
+        "command_seconds": 20,
+        "max_input_bytes": 67108864,
+        "max_output_bytes": 16777216,
+        "memory_mb": 512,
+        "session_seconds": 900,
+        "idle_seconds": 120,
+        "max_sessions": 2,
+        "max_operations": 32
+      },
+      "max_result_bytes": 24576
     }
   ],
   "skills": []

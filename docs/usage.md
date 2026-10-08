@@ -52,7 +52,11 @@ result = await client.run(
 )
 ```
 
-`files` accepts up to eight explicitly selected local `.txt`, `.md`, `.csv`, `.json`, `.zip`, `.diff` or `.patch` files, subject to the existing 262,144-byte per-file limit and content rules. All local files are checked before uploads begin. Uploaded files become attached artifacts; they do not automatically become workspace files or grant tools. For invoice CSVs with `invoice_id,amount` columns, create a toolkit agent with `tools=["csv_analyze"]` and `general=None` (the default). The built-in `csv_analyze`, `python_analyze`, document and repository tools belong to that toolkit runtime; adding them to the general quickstart configuration above is not supported. General agents use workspace capabilities or installed extensions instead. Both configurations use the same `client.run()` method. Project files use the explicit workspace interface below.
+`files` accepts up to eight explicitly selected local text, CSV, JSON, PDF, XLSX, PNG, JPEG, WebP, `.bin`, diff or repository ZIP files. The default per-file limit is 16 MiB; the operator can configure it. The client validates and snapshots all local files before uploads begin, then streams those same bytes on retries. Set `Client(max_file_bytes=...)` to match an operator-approved larger ceiling. Uploaded files become attached artifacts; they do not automatically become workspace files or grant tools.
+
+General agents can use `tools=["e2b_files", "artifact_read"]` to process attached files in E2B and inspect bounded text outputs. Artifact metadata is included in model context; generated files appear in `RunResult.files`. This requires worker-side E2B credentials and the installed registrations. PDF/XLSX parsing libraries require an operator-built E2B template; allowing a file format does not install its parser. See [file storage and transfer](artifacts.md) and [E2B](e2b.md).
+
+For small invoice CSVs with `invoice_id,amount` columns, the toolkit configuration `tools=["csv_analyze"]` and `general=None` remains available. Its existing sandbox/output limits still apply. The built-in toolkit tools belong to that runtime; general agents use workspace capabilities or installed extensions. Both use `client.run()`.
 
 Progress callbacks can be synchronous or asynchronous. They report actual uploads and observed lifecycle changes, including the run ID immediately after submission. They do not invent tool activity or stream model tokens. Detailed SSE events remain available through `watch()`.
 
@@ -81,7 +85,7 @@ else:
 
 A recorded approval denial keeps the final task outcome `blocked` even if a later v3 completion assessment says accepted. The execution status may still be `completed`; inspect `outcome` before treating the task as successful. Such a run cannot export an acceptance bundle.
 
-A successful retry of the same durable tool operation clears its failure. Other unresolved file-tool failures remain visible for review; accepted general-runtime tasks use their completion gate. Older file-tool runs without outcome tracking return `needs_attention` with `outcome_unavailable`; older recorded approval denials can still be identified. Answer wording never overrides server outcome facts. New lifecycle SSE events include `outcome` and `outcome_reason`; historical events remain unchanged. Clients can fetch the current run projection when replaying older events.
+A successful retry of the same durable tool operation clears its failure. Other unresolved tool failures remain visible for review, including general-runtime command or output failures when the model accepts completion. Such a task requires `needs_attention` and cannot export successful acceptance evidence. Older file-tool runs without outcome tracking return `needs_attention` with `outcome_unavailable`; older recorded approval denials can still be identified. Answer wording never overrides server outcome facts. New lifecycle SSE events include `outcome` and `outcome_reason`; historical events remain unchanged. Clients can fetch the current run projection when replaying older events.
 
 After the user has reviewed and approved a specific action:
 

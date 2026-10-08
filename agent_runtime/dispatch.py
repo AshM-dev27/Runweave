@@ -16,6 +16,8 @@ from .store import TERMINAL
 class Dispatcher:
     def __init__(self, store, client, task_queue):
         self.store, self.client, self.task_queue = store, client, task_queue
+        self.cleanup_cursor = ""
+        self.toolkit_cleanup_cursor = ""
 
     async def once(self):
         async with self.store.database.sessions() as db:
@@ -98,6 +100,43 @@ class Dispatcher:
         await self.reconcile_cleanup()
         await self.reconcile_general_cleanup()
         await self.reconcile_operator_recovery()
+        await self.reconcile_computers()
+
+    async def reconcile_computers(self):
+        from sqlalchemy import or_
+
+        from .computer_db import ComputerSessionRow
+        from .db import now
+
+        async with self.store.database.sessions() as db:
+            ids = list(
+                await db.scalars(
+                    select(ComputerSessionRow.id)
+                    .where(
+                        ComputerSessionRow.status != "closed",
+                        or_(
+                            ComputerSessionRow.status.in_(["closing", "unknown"]),
+                            ComputerSessionRow.expires_at <= now(),
+                            (ComputerSessionRow.status == "ready")
+                            & (ComputerSessionRow.idle_expires_at <= now()),
+                        ),
+                    )
+                    .order_by(ComputerSessionRow.expires_at)
+                    .limit(100)
+                )
+            )
+        for computer_id in ids:
+            try:
+                await self.client.start_workflow(
+                    "ComputerCleanupWorkflow",
+                    computer_id,
+                    id="computer-cleanup:" + computer_id,
+                    task_queue=self.task_queue + "-v3",
+                    execution_timeout=timedelta(minutes=15),
+                    id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+                )
+            except WorkflowAlreadyStartedError:
+                pass
 
     async def reconcile(self):
         # Covers workflow execution timeouts/failed workflow tasks and crashes during finalization.
@@ -124,7 +163,19 @@ class Dispatcher:
         from .sandbox import job_complete
 
         async with self.store.database.sessions() as db:
-            features = list(await db.scalars(select(ToolkitRunRow).where(ToolkitRunRow.parent_id.is_(None))))
+            features = list(
+                await db.scalars(
+                    select(ToolkitRunRow)
+                    .where(
+                        ToolkitRunRow.parent_id.is_(None),
+                        ToolkitRunRow.state["cleanup_state"].as_string() == "pending",
+                        ToolkitRunRow.run_id > self.toolkit_cleanup_cursor,
+                    )
+                    .order_by(ToolkitRunRow.run_id)
+                    .limit(100)
+                )
+            )
+        self.toolkit_cleanup_cursor = features[-1].run_id if len(features) == 100 else ""
         for feature in features:
             if feature.state.get("cleanup_state") != "pending":
                 continue
@@ -143,10 +194,24 @@ class Dispatcher:
                 await self.store.cleanup_complete(feature.run_id, feature.state)
 
     async def reconcile_general_cleanup(self):
+        from .extensions import deferred_handler
         from .general_db import GeneralRunRow
 
         async with self.store.database.sessions() as db:
-            records = list(await db.scalars(select(GeneralRunRow)))
+            records = list(
+                await db.scalars(
+                    select(GeneralRunRow)
+                    .join(RunRow, RunRow.id == GeneralRunRow.run_id)
+                    .where(
+                        GeneralRunRow.data["cleanup_state"].as_string() == "pending",
+                        RunRow.status.in_(TERMINAL),
+                        GeneralRunRow.run_id > self.cleanup_cursor,
+                    )
+                    .order_by(GeneralRunRow.run_id)
+                    .limit(100)
+                )
+            )
+        self.cleanup_cursor = records[-1].run_id if len(records) == 100 else ""
         for gr in records:
             if gr.data.get("cleanup_state") != "pending":
                 continue
@@ -162,8 +227,7 @@ class Dispatcher:
             try:
                 run = await self.store.get(gr.run_id)
                 if run.status in TERMINAL and any(
-                    e.get("extension", {}).get("handler") == "browser_use.v4"
-                    for e in gr.data["tools"].values()
+                    deferred_handler(e.get("extension", {})) for e in gr.data["tools"].values()
                 ):
                     try:
                         await self.client.start_workflow(

@@ -13,6 +13,7 @@ from pydantic_ai.models.wrapper import WrapperModel
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from .computer_runtime import cleanup_computer
 from .general_completion import general_completion
 from .general_contracts import Criterion, PlanStep, StepDecision
 from .general_db import GeneralAttemptRow, GeneralOperationRow
@@ -541,6 +542,7 @@ async def general_step(run_id: str | dict):
                 "last_action": last_action,
                 "last_result": state["last_result"],
                 "remaining_budget": remaining_budget,
+                "artifacts": [ref.model_dump(mode="json") for ref in await store.artifact_list(run_id)],
                 "capabilities": [
                     {k: state["tools"][a][k] for k in ("alias", "description", "arguments_schema", "effect")}
                     for a in state.get("loaded", list(state["tools"])[:4])
@@ -690,7 +692,7 @@ async def execute_general_action(data: dict):
                 return old.data["result"]
             if old and old.data.get("external") and old.data.get("started"):
                 alias = old.data["decision"]["action"]["capability"]
-                if gr.data["tools"][alias]["effect"]["kind"] == "external-write":
+                if gr.data["tools"][alias]["effect"]["kind"] != "read":
                     # A lost receipt after dispatch is not proof that the write failed.
                     # In particular, exhausting reconciliation must never clear the intent.
                     old.data = {**old.data, "status": "outcome_unknown", "lease": 0}
@@ -782,9 +784,11 @@ async def general_resource_pause(data: dict):
 
 @activity.defn
 async def cleanup_browser_extensions(run_id: str):
+    # Activity name is retained for existing Temporal histories; all deferred handlers are supported.
     from sqlalchemy import select
 
     from .extension_runtime import cleanup_extension
+    from .extensions import deferred_handler
 
     store = get_store()
     async with store.database.sessions() as db:
@@ -796,16 +800,13 @@ async def cleanup_browser_extensions(run_id: str):
     for op in operations:
         alias = op.data.get("decision", {}).get("action", {}).get("capability")
         definition = state["tools"].get(alias, {}).get("extension", {})
-        if (
-            op.data.get("external")
-            and definition.get("handler") == "browser_use.v4"
-            and op.data.get("result") is None
-        ):
+        if op.data.get("external") and deferred_handler(definition) and op.data.get("result") is None:
             pending |= not await cleanup_extension(store, run_id, op.id, provider_io=True)
     return not pending
 
 
 GENERAL_ACTIVITIES = [
+    cleanup_computer,
     cleanup_browser_extensions,
     reconcile_operation,
     general_resource_pause,

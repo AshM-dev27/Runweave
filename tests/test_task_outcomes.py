@@ -11,6 +11,21 @@ from agent_runtime.schemas import AgentConfig, RunCreate
 from agent_runtime.toolkit_runtime import toolkit_tool
 
 
+@pytest.mark.parametrize(
+    "issues,expected",
+    [
+        (["e2b_command_failed"], ("needs_attention", "tool_error")),
+        (["artifact_not_authorized"], ("blocked", "artifact_not_authorized")),
+        (["child_failed"], ("needs_attention", "child_failed")),
+        ([], ("succeeded", None)),
+    ],
+)
+def test_completion_assessment_does_not_override_unresolved_execution_issues(issues, expected):
+    from agent_runtime.task_outcomes import classify
+
+    assert classify("completed", accepted=True, issues=issues) == expected
+
+
 async def submit(store, tools, **kwargs):
     agent = await store.agent(
         AgentConfig(name="Outcome test", provider="fake", model="deterministic", tools=tools, **kwargs)

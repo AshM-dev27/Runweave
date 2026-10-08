@@ -55,10 +55,13 @@ PUBLIC_ERRORS = {
         "approval_requires_root",
         "Submit this decision using the root run ID and the returned approval ID.",
     ),
-    "artifact_size_limit": ("artifact_size_limit", "Each uploaded file must be at most 262144 bytes."),
+    "artifact_size_limit": (
+        "artifact_size_limit",
+        "The file exceeds the configured artifact size limit (16 MiB by default).",
+    ),
     "unsupported_media_type": (
         "unsupported_media_type",
-        "Use UTF-8 text, Markdown, CSV, JSON, a text diff, or a bounded repository ZIP.",
+        "Use text, CSV, JSON, PDF, XLSX, supported images, binary files or a bounded repository ZIP.",
     ),
     "invalid_filename": (
         "invalid_filename",

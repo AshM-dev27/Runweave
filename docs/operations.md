@@ -20,13 +20,13 @@ uv run --env-file .env.local python -m agent_runtime.worker
 
 Sandbox tasks additionally require the authenticated broker. Host workers normally use port 18090; isolated validation uses 18091. Tool discovery does not probe service health.
 
-The worker dispatches committed outbox records; queued submissions and decisions survive worker downtime. Back up PostgreSQL, retained registrations, Temporal history and broker state together. **Do not delete volumes to recover runs.** Drain/version workflows before incompatible workflow/activity changes; migration `0002` refuses active legacy runs. Restarts do not replenish budgets.
+The worker dispatches committed outbox records; queued submissions and decisions survive worker downtime. Back up PostgreSQL, retained registrations, Temporal history, broker state and [artifact byte storage](artifacts.md) together. **Do not delete volumes to recover runs.** Drain/version workflows before incompatible workflow/activity changes; migration `0002` refuses active legacy runs. Restarts do not replenish budgets. Remote guest files remain temporary even when the computer identity and ownership are persisted.
 
 ## Upgrade and rollback
 
-For the local Compose deployment, build `api`, `worker`, `mcp`, `migrate` and `sandbox-broker` before the cutover. Retain their previous image IDs under rollback tags. Stop API admission, drain active runs, then stop the worker and broker before backing up PostgreSQL (including Temporal databases) and the broker state volume. Keep both named volumes when recreating services.
+For the local Compose deployment, build matching `api`, `worker`, `mcp`, `migrate` and `sandbox-broker` images before the cutover. Retain their previous image IDs under rollback tags. Close unused remote computers and record any unresolved acquisitions or cleanup. Stop API admission, drain active runs, then stop the worker and broker before taking coordinated backups of PostgreSQL (including Temporal databases), broker state and artifact bytes. Preserve every named volume when recreating services. Apply migrations through `0007` and deploy compatible computer cleanup activities/workflows on replacement workers; see the [single-workspace release procedure](production.md#release).
 
-Local rollback bundles belong in the ignored, private `var/backups/` directory. They contain the compressed PostgreSQL dump, broker state archive and `rollback.compose.json` image overrides. To restore the prior application images, use the main Compose file plus that override with `--no-build`; restore persisted state only as a separate, deliberate recovery step. Keep images referenced by run snapshots.
+Local rollback bundles belong in the ignored, private `var/backups/` directory. Retain database dumps, broker and artifact archives, private configuration snapshots and the exact previous image identities. An optional Compose override can pin those rollback images for startup with `--no-build`; restore persisted state only as a separate, deliberate recovery step. Do not assume a downgrade is available: migrations `0005`–`0007` retain recovery evidence and refuse automatic downgrade. Keep images referenced by run snapshots. Restoring a database cannot resurrect an expired E2B computer.
 
 After an upgrade, verify authenticated readiness and execute fake smoke tasks through the running API, including approvals, event replay, contract rejection, evidence export and sandbox cancellation. Readiness alone does not exercise these paths. Retain runtime records and paid-test ledgers; remove temporary diagnostics and only unused images belonging to this project.
 
@@ -50,7 +50,7 @@ Approved note effects and events commit atomically under stable IDs; read-only M
 
 ## Sandbox and data security
 
-The API and worker have no Docker socket or host mounts and drop Linux capabilities. The broker alone owns the Docker socket and private state volume: it is a trusted privileged boundary. Generated Python has no host fallback; containers share the host kernel and are not VMs.
+The API and worker have no Docker socket or host workspace mount and drop Linux capabilities. They share a persistent artifact volume; the production profile mounts an operator-provisioned artifact directory. The broker alone owns the Docker socket and private broker state: it is a trusted privileged boundary. Local generated Python has no host fallback; broker containers share the host kernel and are not VMs. E2B uses a separate remote sandbox adapter with guest networking disabled and no provider/business credentials injected.
 
 Toolkit jobs use a fixed image, no network/host mounts, read-only root, resource limits and bounded output collection. V3 project commands use a separate Python image whose immutable ID is pinned in `config/general.json`.
 

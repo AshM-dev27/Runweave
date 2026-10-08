@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Query, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import settings
@@ -70,7 +70,7 @@ def create_app(store: Store | None = None, api_key: str | None = None):
             headers={"WWW-Authenticate": "Bearer"} if exc.status == 401 else {},
         )
 
-    from .artifacts import MAX_ARTIFACT
+    from .artifacts import MEDIA
     from .tool_contracts import ArtifactRef, RunBudget, ToolDescriptor
 
     @app.get("/v1/tools", response_model=list[ToolDescriptor])
@@ -91,14 +91,7 @@ def create_app(store: Store | None = None, api_key: str | None = None):
             "requestBody": {
                 "required": True,
                 "content": {
-                    media: {"schema": {"type": "string", "format": "binary"}}
-                    for media in [
-                        "text/plain",
-                        "text/markdown",
-                        "text/csv",
-                        "application/json",
-                        "application/zip",
-                    ]
+                    media: {"schema": {"type": "string", "format": "binary"}} for media in sorted(MEDIA)
                 },
             }
         },
@@ -109,13 +102,8 @@ def create_app(store: Store | None = None, api_key: str | None = None):
         content_type: Annotated[str, Header()],
         x_filename: Annotated[str, Header()] = "input.txt",
     ):
-        data = bytearray()
-        async for chunk in request.stream():
-            data.extend(chunk)
-            if len(data) > MAX_ARTIFACT:
-                raise Problem(413, "artifact_size_limit")
-        return await store.upload(
-            bytes(data), content_type.split(";")[0], x_filename, "upload:" + idempotency_key
+        return await store.upload_stream(
+            request.stream(), content_type.split(";")[0].strip(), x_filename, "upload:" + idempotency_key
         )
 
     @app.get("/v1/artifacts", response_model=list[ArtifactRef])
@@ -128,14 +116,19 @@ def create_app(store: Store | None = None, api_key: str | None = None):
 
     @app.get("/v1/artifacts/{artifact_id}/content")
     async def content(artifact_id: str):
-        ref, data = await store.artifact(artifact_id)
-        return Response(
-            data,
+        ref = await store.artifact_ref(artifact_id)
+        # Verify the complete source before sending headers. A missing/corrupt blob
+        # is a clean HTTP error, never a successful download with unverified bytes.
+        async for _ in store.artifact_chunks(artifact_id):
+            pass
+        return StreamingResponse(
+            store.artifact_chunks(artifact_id),
             media_type=ref.media_type,
             headers={
                 "ETag": '"' + ref.sha256 + '"',
                 "Content-Disposition": 'attachment; filename="' + ref.filename + '"',
                 "X-Content-Type-Options": "nosniff",
+                "Content-Length": str(ref.size_bytes),
             },
         )
 

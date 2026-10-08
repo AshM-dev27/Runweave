@@ -1,5 +1,6 @@
-"""Bounded immutable artifacts and safe text-only repository archives."""
+"""Bounded immutable artifacts; repository archives retain their text-only contract."""
 
+import codecs
 import hashlib
 import io
 import json
@@ -10,9 +11,35 @@ from pathlib import PurePosixPath
 
 from .tool_contracts import ArtifactRef
 
-MAX_ARTIFACT = 262144
-MAX_STORAGE = 32 * 1024 * 1024
-MEDIA = {"text/plain", "text/markdown", "text/csv", "application/json", "application/zip", "text/x-diff"}
+MAX_ARTIFACT = 16 * 1024 * 1024
+MAX_STORAGE = 512 * 1024 * 1024
+TEXT_MEDIA = {"text/plain", "text/markdown", "text/csv", "application/json", "text/x-diff"}
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MEDIA = TEXT_MEDIA | {
+    "application/zip",
+    "application/pdf",
+    XLSX,
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "application/octet-stream",
+}
+FILE_MEDIA = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".zip": "application/zip",
+    ".diff": "text/x-diff",
+    ".patch": "text/x-diff",
+    ".pdf": "application/pdf",
+    ".xlsx": XLSX,
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".bin": "application/octet-stream",
+}
 
 
 def safe_path(name):
@@ -58,16 +85,71 @@ def archive(content):
     return result
 
 
-def validate(content, media, filename):
-    if len(content) > MAX_ARTIFACT:
-        raise ValueError("artifact_size_limit")
+def validate_metadata(media, filename):
     if media not in MEDIA:
         raise ValueError("unsupported_media_type")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", filename):
         raise ValueError("invalid_filename")
+
+
+def validate_file(source, media, filename, max_bytes=MAX_ARTIFACT):
+    """Validate a staged file without expanding binary documents into host memory."""
+    validate_metadata(media, filename)
+    if source.stat().st_size > max_bytes:
+        raise ValueError("artifact_size_limit")
+    with source.open("rb") as file:
+        prefix = file.read(16)
+        if media in TEXT_MEDIA:
+            file.seek(0)
+            decoder = codecs.getincrementaldecoder("utf-8")()
+            try:
+                while chunk := file.read(65536):
+                    if "\x00" in decoder.decode(chunk):
+                        raise ValueError
+                decoder.decode(b"", final=True)
+                if media == "application/json":
+                    file.seek(0)
+                    json.load(file)
+            except (ValueError, UnicodeError, RecursionError):
+                raise ValueError("invalid_artifact_content") from None
+        elif media == "application/zip":
+            file.seek(0)
+            archive(file.read())
+        elif media == XLSX:
+            try:
+                with zipfile.ZipFile(source) as z:
+                    entries = z.infolist()
+                    names = {e.filename for e in entries}
+                    if (
+                        not {"[Content_Types].xml", "xl/workbook.xml"}.issubset(names)
+                        or len(entries) > 10000
+                        or len(names) != len(entries)
+                        or sum(e.file_size for e in entries) > 256 * 1024 * 1024
+                        or any(not safe_path(e.filename) or e.flag_bits & 1 for e in entries)
+                    ):
+                        raise ValueError
+            except (ValueError, zipfile.BadZipFile):
+                raise ValueError("invalid_artifact_content") from None
+        elif (
+            media == "application/pdf"
+            and not prefix.startswith(b"%PDF-")
+            or media == "image/png"
+            and not prefix.startswith(b"\x89PNG\r\n\x1a\n")
+            or media == "image/jpeg"
+            and not prefix.startswith(b"\xff\xd8\xff")
+            or media == "image/webp"
+            and not (prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP")
+        ):
+            raise ValueError("invalid_artifact_content")
+
+
+def validate(content, media, filename):
+    if len(content) > MAX_ARTIFACT:
+        raise ValueError("artifact_size_limit")
+    validate_metadata(media, filename)
     if media == "application/zip":
         archive(content)
-    else:
+    elif media in TEXT_MEDIA:
         try:
             text = content.decode("utf-8")
             if "\x00" in text:
@@ -76,6 +158,14 @@ def validate(content, media, filename):
                 json.loads(text)
         except Exception:
             raise ValueError("invalid_artifact_content") from None
+    else:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.NamedTemporaryFile() as file:
+            file.write(content)
+            file.flush()
+            validate_file(Path(file.name), media, filename)
     return hashlib.sha256(content).hexdigest()
 
 
@@ -84,6 +174,12 @@ def ref(row):
 
 
 def verify(row):
+    if row.blob_key is not None:
+        if row.content is not None or row.blob_key != row.sha256:
+            raise ValueError("artifact_integrity_error")
+        return None
+    if row.content is None:
+        raise ValueError("artifact_integrity_error")
     if len(row.content) != row.size_bytes or hashlib.sha256(row.content).hexdigest() != row.sha256:
         raise ValueError("artifact_integrity_error")
     return row.content

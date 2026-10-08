@@ -1,6 +1,17 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -114,15 +125,30 @@ class ToolkitRunRow(Base):
     state: Mapped[dict] = mapped_column(JSON)
 
 
+Index(
+    "ix_toolkit_runs_pending_cleanup",
+    ToolkitRunRow.run_id,
+    postgresql_where=ToolkitRunRow.state["cleanup_state"].as_string() == "pending",
+    sqlite_where=ToolkitRunRow.state["cleanup_state"].as_string() == "pending",
+)
+
+
 class ArtifactRow(Base):
     __tablename__ = "artifacts"
+    __table_args__ = (
+        CheckConstraint(
+            "(content IS NOT NULL AND blob_key IS NULL) OR (content IS NULL AND blob_key IS NOT NULL)",
+            name="ck_artifacts_content_location",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     key: Mapped[str] = mapped_column(String(160), unique=True)
     sha256: Mapped[str] = mapped_column(String(64))
     media_type: Mapped[str] = mapped_column(String(80))
     filename: Mapped[str] = mapped_column(String(100))
     size_bytes: Mapped[int] = mapped_column(Integer)
-    content: Mapped[bytes] = mapped_column(LargeBinary)
+    content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    blob_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     producer_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

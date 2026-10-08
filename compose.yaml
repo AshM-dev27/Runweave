@@ -48,6 +48,9 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       OPENAI_API_KEY: ""
       ANTHROPIC_API_KEY: ""
+      E2B_API_KEY: ""
+      ARTIFACT_STORAGE_PATH: /var/lib/runweave/artifacts
+    volumes: ["artifact-data:/var/lib/runweave/artifacts"]
     command: ["uv", "run", "--frozen", "--no-dev", "uvicorn", "agent_runtime.api:app", "--host", "0.0.0.0", "--port", "8000"]
     ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
   worker:
@@ -59,12 +62,19 @@ services:
       migrate: {condition: service_completed_successfully}
       temporal: {condition: service_started}
       mcp: {condition: service_started}
-    env_file: ["${AGENTS_ENV_FILE:-.env.local}", ".env.sandbox.local"]
+    env_file:
+      - path: "${AGENTS_ENV_FILE:-.env.local}"
+      - path: .env.sandbox.local
+      - path: .env.e2b.local
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://agents:local-development-only@postgres:5432/agents
       TEMPORAL_ADDRESS: temporal:7233
       MCP_URL: http://mcp:8001/mcp
       SANDBOX_BROKER_URL: http://sandbox-broker:8090
+      API_KEY: ""
+      ARTIFACT_STORAGE_PATH: /var/lib/runweave/artifacts
+    volumes: ["artifact-data:/var/lib/runweave/artifacts"]
     command: ["uv", "run", "--frozen", "--no-dev", "python", "-m", "agent_runtime.worker"]
   sandbox-image:
     image: agent-runtime-sandbox:v1
@@ -86,3 +96,4 @@ services:
 volumes:
   sandbox-state:
   postgres-data:
+  artifact-data:

@@ -1,9 +1,21 @@
 """Additive v3 persistence; legacy rows and JSON are never migrated in place."""
 
-from sqlalchemy import JSON, ForeignKey, Integer, LargeBinary, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .db import Base
+from .db import Base, now
 
 
 class GeneralRunRow(Base):
@@ -12,6 +24,14 @@ class GeneralRunRow(Base):
     root_id: Mapped[str] = mapped_column(String(36), index=True)
     parent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     data: Mapped[dict] = mapped_column(JSON)
+
+
+Index(
+    "ix_general_runs_pending_cleanup",
+    GeneralRunRow.run_id,
+    postgresql_where=GeneralRunRow.data["cleanup_state"].as_string() == "pending",
+    sqlite_where=GeneralRunRow.data["cleanup_state"].as_string() == "pending",
+)
 
 
 class GeneralRecordRow(Base):
@@ -39,6 +59,17 @@ class GeneralAttemptRow(Base):
     operation_id: Mapped[str] = mapped_column(ForeignKey("general_operations.id"))
     ordinal: Mapped[int] = mapped_column(Integer)
     data: Mapped[dict] = mapped_column(JSON)
+
+
+class ExtensionSlotRow(Base):
+    """Durable provider admission: uncertainty and cleanup retain their capacity."""
+
+    __tablename__ = "extension_slots"
+    __table_args__ = (Index("ix_extension_slots_handler_active", "handler", "active"),)
+    operation_id: Mapped[str] = mapped_column(ForeignKey("general_operations.id"), primary_key=True)
+    handler: Mapped[str] = mapped_column(String(200))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class ProjectWorkspaceRow(Base):

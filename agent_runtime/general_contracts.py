@@ -374,7 +374,7 @@ class OperationPage(Contract):
 
 
 class ReconciliationRequest(Contract):
-    kind: Literal["external_write", "model_usage"]
+    kind: Literal["external_write", "model_usage", "tool_cleanup", "tool_cleanup_attestation"]
     target_id: str = Field(min_length=1, max_length=160)
     reported_tokens: int | None = Field(default=None, strict=True, ge=0, le=1000000000)
     evidence_ref: str | None = Field(
@@ -386,6 +386,9 @@ class ReconciliationRequest(Contract):
         if self.kind == "model_usage":
             if self.reported_tokens is None or self.evidence_ref is None:
                 raise ValueError("Model accounting requires reported usage and an evidence reference")
+        elif self.kind == "tool_cleanup_attestation":
+            if self.reported_tokens is not None or self.evidence_ref is None:
+                raise ValueError("Cleanup attestation requires an operator evidence reference")
         elif self.reported_tokens is not None or self.evidence_ref is not None:
             raise ValueError("External writes require the pinned handler's evidence")
         return self

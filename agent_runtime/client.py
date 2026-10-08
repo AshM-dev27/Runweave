@@ -17,7 +17,12 @@ TERMINAL = {"completed", "failed", "cancelled"}
 
 
 class Client:
-    def __init__(self, base_url="http://localhost:18000", api_key="", *, http_client=None):
+    def __init__(
+        self, base_url="http://localhost:18000", api_key="", *, http_client=None, max_file_bytes=16777216
+    ):
+        if type(max_file_bytes) is not int or not 1 <= max_file_bytes <= 268435456:
+            raise ClientError("max_file_bytes must be an integer between 1 and 268435456.")
+        self.max_file_bytes = max_file_bytes
         self.owned = http_client is None
         self.http = http_client or httpx.AsyncClient(
             base_url=base_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=30
@@ -30,10 +35,13 @@ class Client:
         if self.owned:
             await self.http.aclose()
 
-    async def request(self, method, path, *, retry=False, **kwargs):
+    async def request(self, method, path, *, retry=False, content_factory=None, **kwargs):
         for attempt in range(3 if retry else 1):
+            content = content_factory() if content_factory else None
             try:
-                response = await self.http.request(method, path, **kwargs)
+                response = await self.http.request(
+                    method, path, **({**kwargs, "content": content} if content_factory else kwargs)
+                )
                 try:
                     check(response)
                 except ClientError as exc:
@@ -47,6 +55,9 @@ class Client:
                         idempotency_key=kwargs.get("headers", {}).get("Idempotency-Key"),
                     ) from None
                 await asyncio.sleep(0.1 * (attempt + 1))
+            finally:
+                if content is not None and hasattr(content, "aclose"):
+                    await content.aclose()
 
     async def evidence(self, run_id):
         from .evidence import AcceptanceBundle, verify_evidence_bundle
@@ -130,6 +141,49 @@ class Client:
     async def installed_capabilities(self):
         return await self.request("GET", "/v1/capabilities", retry=True)
 
+    async def extension_status(self):
+        return await self.request("GET", "/v1/extensions/status", retry=True)
+
+    async def computers(self, session_id, *, cursor="", limit=100):
+        from .computer_contracts import ComputerSession
+
+        return [
+            ComputerSession.model_validate(row)
+            for row in await self.request(
+                "GET",
+                f"/v1/sessions/{session_id}/computers",
+                params={"cursor": cursor, "limit": limit},
+                retry=True,
+            )
+        ]
+
+    async def computer(self, computer_id):
+        from .computer_contracts import ComputerSession
+
+        return ComputerSession.model_validate(
+            await self.request("GET", f"/v1/computers/{computer_id}", retry=True)
+        )
+
+    async def close_computer(self, computer_id):
+        from .computer_contracts import ComputerSession
+
+        return ComputerSession.model_validate(
+            await self.request("POST", f"/v1/computers/{computer_id}/close", retry=True)
+        )
+
+    async def attest_computer_cleanup(self, computer_id, evidence_ref, *, idempotency_key):
+        from .computer_contracts import ComputerSession
+
+        return ComputerSession.model_validate(
+            await self.request(
+                "POST",
+                f"/v1/computers/{computer_id}/cleanup-attestation",
+                json={"evidence_ref": evidence_ref},
+                headers={"Idempotency-Key": idempotency_key},
+                retry=True,
+            )
+        )
+
     async def skills(self):
         return await self.request("GET", "/v1/skills", retry=True)
 
@@ -168,6 +222,66 @@ class Client:
             return data
         except httpx.TransportError:
             raise ClientError("Artifact download failed") from None
+
+    async def upload_file(self, path, *, idempotency_key=None):
+        """Upload one explicitly selected local file with bounded memory and stable retries."""
+        prepared = self._prepare_files([path])
+        try:
+            filename, media, snapshot = prepared[0]
+            return await self._upload_snapshot(snapshot, media, filename, idempotency_key or uuid4().hex)
+        finally:
+            prepared.close()
+
+    async def _upload_snapshot(self, path, media_type, filename, key):
+        from .client_files import file_chunks
+        from .tool_contracts import ArtifactRef
+
+        return ArtifactRef.model_validate(
+            await self.request(
+                "POST",
+                "/v1/artifacts",
+                retry=True,
+                content_factory=lambda: file_chunks(path),
+                headers={"Content-Type": media_type, "X-Filename": filename, "Idempotency-Key": key},
+            )
+        )
+
+    async def download_file(self, artifact_id, path):
+        """Verify a streamed download before atomically replacing the destination."""
+        import os
+        import tempfile
+
+        reference = await self.request("GET", f"/v1/artifacts/{artifact_id}", retry=True)
+        destination = Path(path)
+        temporary = None
+        try:
+            fd, temporary = tempfile.mkstemp(prefix=".runweave-", dir=destination.parent)
+            sha, size = hashlib.sha256(), 0
+            with os.fdopen(fd, "wb") as output:
+                async with self.http.stream("GET", f"/v1/artifacts/{artifact_id}/content") as response:
+                    # Error bodies must be bounded/read before the allowlisted error mapper.
+                    if response.is_error:
+                        await response.aread()
+                    check(response)
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
+                        size += len(chunk)
+                        if size > reference["size_bytes"]:
+                            raise ClientError("Artifact integrity check failed")
+                        sha.update(chunk)
+                        await asyncio.to_thread(output.write, chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if size != reference["size_bytes"] or sha.hexdigest() != reference["sha256"]:
+                raise ClientError("Artifact integrity check failed")
+            os.replace(temporary, destination)
+            return destination
+        except (httpx.TransportError, OSError):
+            raise ClientError(
+                "Artifact download failed; check the destination and service readiness."
+            ) from None
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
 
     async def artifacts(self, run_id=None):
         return await self.request(
@@ -250,6 +364,7 @@ class Client:
         """
         key = idempotency_key if idempotency_key is not None else uuid4().hex
         run_id = None
+        prepared = None
         try:
             self._validate_wait(timeout, on_progress)
             if (
@@ -296,8 +411,10 @@ class Client:
                 )
                 # Stable per-request slots detect changed files instead of silently creating a new upload.
                 upload_key = "run-file-" + hashlib.sha256(f"{key}:{index}".encode()).hexdigest()
-                ref = await self.upload(content, media, filename, idempotency_key=upload_key)
+                ref = await self._upload_snapshot(content, media, filename, upload_key)
                 attached.append(ref.id)
+            prepared.close()
+            prepared = None
             submitted = await self.submit(
                 agent_id,
                 input,
@@ -322,6 +439,9 @@ class Client:
             exc.idempotency_key = key
             exc.run_id = run_id or exc.run_id
             raise
+        finally:
+            if prepared is not None:
+                prepared.close()
 
     async def result(self, run_id, *, timeout=150, on_progress=None, idempotency_key=None) -> RunResult:
         """Wait for an existing task without submitting, approving or increasing limits."""
@@ -363,56 +483,10 @@ class Client:
                 idempotency_key=progress.idempotency_key,
             ) from None
 
-    @staticmethod
-    def _prepare_files(files):
-        import os
-        import stat
+    def _prepare_files(self, files):
+        from .client_files import PreparedFiles
 
-        from .artifacts import MAX_ARTIFACT, validate
-        from .client_errors import PUBLIC_ERRORS
-
-        if files is None:
-            return []
-        if not isinstance(files, (list, tuple)) or len(files) > 8:
-            raise ClientError("files must be a list of at most eight local file paths.")
-        media_types = {
-            ".txt": "text/plain",
-            ".md": "text/markdown",
-            ".csv": "text/csv",
-            ".json": "application/json",
-            ".zip": "application/zip",
-            ".diff": "text/x-diff",
-            ".patch": "text/x-diff",
-        }
-        prepared = []
-        for item in files:
-            try:
-                path = Path(item)
-                if path.suffix.lower() not in media_types:
-                    raise ClientError(
-                        "Unsupported file type. Use .txt, .md, .csv, .json, .zip, .diff or .patch."
-                    )
-                if path.is_symlink():
-                    raise ClientError("Upload a regular file, not a symbolic link.")
-                # Open nonblocking so a device or FIFO cannot hang the client before validation.
-                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-                with os.fdopen(fd, "rb") as file:
-                    if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
-                        raise ClientError("Upload a regular file.")
-                    content = file.read(MAX_ARTIFACT + 1)
-                media = media_types[path.suffix.lower()]
-                validate(content, media, path.name)
-                prepared.append((path.name, media, content))
-            except (OSError, TypeError):
-                raise ClientError(
-                    "Cannot read an attached file. Check that each path is a readable regular file."
-                ) from None
-            except ValueError as exc:
-                code, message = PUBLIC_ERRORS.get(
-                    str(exc), ("invalid_file", "Check the attached file's content and format.")
-                )
-                raise ClientError(message, code=code) from None
-        return prepared
+        return PreparedFiles(files, self.max_file_bytes)
 
     async def continue_run(
         self, run_id, input, *, idempotency_key=None, artifact_ids=None, task=None, workspace=None
@@ -506,7 +580,9 @@ class Client:
                     if budget_stop:
                         state = await self.resources(run_id)
                         # Reservations held by an in-flight request settle without operator action.
-                        budget_stop = (state.get("pause") or {}).get("block", {}).get("reason") != "capacity"
+                        # The pause may already have cleared since the run read; refresh in that case.
+                        pause = state.get("pause")
+                        budget_stop = bool(pause and pause.get("block", {}).get("reason") != "capacity")
                     if (
                         (run.status in TERMINAL and run.cleanup_state == "complete")
                         or (stop_at_approval and run.status == "awaiting_approval" and run.approvals)

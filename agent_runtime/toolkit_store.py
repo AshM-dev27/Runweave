@@ -3,15 +3,16 @@
 import json
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from . import artifacts
+from .artifact_store import ArtifactStore
 from .db import AgentRow, ArtifactRow, GateRow, RegistrationRow, RunRow, ToolkitOperationRow, ToolkitRunRow
 from .schemas import AgentConfig
 from .tool_registry import digest
 
 
-class ToolkitStore:
+class ToolkitStore(ArtifactStore):
     async def validate_tool_config(self, db, config, agent_id=None):
         from .store import Problem
 
@@ -172,101 +173,6 @@ class ToolkitStore:
                 "budget.reconciled",
                 {"origin_run_id": run_id, "reported_tokens": used},
             )
-
-    async def upload(self, content, media, filename, key, producer=None):
-        from .store import Problem
-
-        try:
-            sha = artifacts.validate(content, media, filename)
-        except ValueError as exc:
-            code = str(exc)
-            raise Problem(
-                413 if code == "artifact_size_limit" else 415 if code == "unsupported_media_type" else 422,
-                code,
-            ) from None
-        async with self.database.sessions.begin() as db:
-            await db.scalar(select(GateRow).where(GateRow.id == 1).with_for_update())
-            if producer:
-                root, rf, run, feature = await self.tree_lock(db, producer)
-            old = await db.scalar(select(ArtifactRow).where(ArtifactRow.key == key))
-            if old:
-                if (old.sha256, old.media_type, old.filename, old.producer_run_id) != (
-                    sha,
-                    media,
-                    filename,
-                    producer,
-                ):
-                    raise Problem(409, "Artifact idempotency conflict")
-                return artifacts.ref(old)
-            size = await db.scalar(select(func.coalesce(func.sum(ArtifactRow.size_bytes), 0)))
-            if size + len(content) > artifacts.MAX_STORAGE:
-                raise Problem(429, "artifact_storage_limit")
-            if producer:
-                count, root_bytes = (
-                    await db.execute(
-                        select(func.count(ArtifactRow.id), func.coalesce(func.sum(ArtifactRow.size_bytes), 0))
-                        .join(ToolkitRunRow, ToolkitRunRow.run_id == ArtifactRow.producer_run_id)
-                        .where(ToolkitRunRow.root_id == root.id)
-                    )
-                ).one()
-                if count >= 8 or root_bytes + len(content) > 1048576:
-                    raise Problem(409, "artifact_count_limit")
-            row = ArtifactRow(
-                id=str(uuid4()),
-                key=key,
-                sha256=sha,
-                media_type=media,
-                filename=filename,
-                size_bytes=len(content),
-                content=content,
-                producer_run_id=producer,
-            )
-            db.add(row)
-            await db.flush()
-            reference = artifacts.ref(row)
-            if producer:
-                feature.state = {
-                    **feature.state,
-                    "artifacts": [*feature.state["artifacts"], reference.model_dump(mode="json")],
-                }
-                await self.emit(
-                    db,
-                    root,
-                    "artifact:" + row.id,
-                    "artifact.created",
-                    {"origin_run_id": producer, "artifact": reference.model_dump(mode="json")},
-                )
-            return reference
-
-    async def artifact(self, artifact_id, run_id=None):
-        from .store import Problem
-
-        async with self.database.sessions() as db:
-            row = await db.get(ArtifactRow, artifact_id)
-            if run_id:
-                feature = await db.get(ToolkitRunRow, run_id)
-                if feature is None or artifact_id not in feature.state["artifact_ids"] + [
-                    a["id"] for a in feature.state["artifacts"]
-                ]:
-                    raise Problem(404, "artifact_not_authorized")
-            if row is None:
-                raise Problem(404, "Artifact not found")
-            try:
-                content = artifacts.verify(row)
-            except ValueError:
-                raise Problem(409, "artifact_integrity_error") from None
-            return artifacts.ref(row), content
-
-    async def artifact_list(self, run_id=None):
-        if run_id:
-            data = await self.toolkit(run_id)
-            ids = list(dict.fromkeys(data["artifact_ids"] + [a["id"] for a in data["artifacts"]]))
-            return [(await self.artifact(a))[0] for a in ids]
-        async with self.database.sessions() as db:
-            return [
-                artifacts.ref(r)
-                for r in await db.scalars(select(ArtifactRow).order_by(ArtifactRow.created_at).limit(100))
-            ]
 
     async def operation_result(self, run_id, call_id, arguments):
         from .store import Problem

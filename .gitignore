@@ -35,9 +35,9 @@ sandbox/state/
 /docs/openapi.json
 /docs/*-downloads/
 /docs/*-2026-*.md
-# Keep approved README diagrams; exclude historical drafts.
+# Keep editable README diagrams; exclude generated previews and historical drafts.
 /docs/assets/*
-!/docs/assets/runweave-architecture.png
-!/docs/assets/runweave-task-lifecycle.png
+!/docs/assets/runweave-architecture.svg
+!/docs/assets/runweave-task-lifecycle.svg
 /developer_tools/
 .DS_Store

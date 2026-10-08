@@ -15,7 +15,12 @@ from agent_runtime.client import Client
 from agent_runtime.dispatch import Dispatcher
 from agent_runtime.general_contracts import GeneralPolicy
 from agent_runtime.general_runtime import GENERAL_ACTIVITIES
-from agent_runtime.general_workflow import ExtensionCleanupWorkflow, GeneralWorkflow, ReconciliationWorkflow
+from agent_runtime.general_workflow import (
+    ComputerCleanupWorkflow,
+    ExtensionCleanupWorkflow,
+    GeneralWorkflow,
+    ReconciliationWorkflow,
+)
 from agent_runtime.schemas import AgentConfig
 
 pytestmark = pytest.mark.integration
@@ -30,7 +35,12 @@ async def backend(store, monkeypatch):
     async with Worker(
         temporal,
         task_queue=queue + "-v3",
-        workflows=[GeneralWorkflow, ReconciliationWorkflow, ExtensionCleanupWorkflow],
+        workflows=[
+            GeneralWorkflow,
+            ReconciliationWorkflow,
+            ExtensionCleanupWorkflow,
+            ComputerCleanupWorkflow,
+        ],
         activities=GENERAL_ACTIVITIES,
     ):
         dispatch = asyncio.create_task(Dispatcher(store, temporal, queue).run())

@@ -1,0 +1,64 @@
+# Application services only. PostgreSQL and Temporal must be provisioned privately and backed up.
+name: runweave-production
+x-runtime: &runtime
+  image: ${RUNWEAVE_IMAGE:?Set an immutable image digest}
+  user: "10001:10001"
+  read_only: true
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  cpus: 2
+  mem_limit: 1g
+  pids_limit: 128
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+x-settings: &settings
+  DATABASE_URL: ${DATABASE_URL:?Set the production PostgreSQL URL}
+  DATABASE_SCHEMA: ${DATABASE_SCHEMA:-public}
+  TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS:?Set the private Temporal address}
+  TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:?Set the production Temporal namespace}
+  TASK_QUEUE: ${TASK_QUEUE:-runweave-production}
+  MAX_ACTIVE_RUNS: ${MAX_ACTIVE_RUNS:-20}
+  EXTENSION_REGISTRY_FILE: config/extensions.json
+  ARTIFACT_STORAGE_PATH: /var/lib/runweave/artifacts
+  ARTIFACT_MAX_BYTES: ${ARTIFACT_MAX_BYTES:-16777216}
+  ARTIFACT_STORAGE_BYTES: ${ARTIFACT_STORAGE_BYTES:-536870912}
+  ARTIFACT_RUN_BYTES: ${ARTIFACT_RUN_BYTES:-67108864}
+  PYDANTIC_AI_NO_BANNER: "1"
+services:
+  migrate:
+    <<: *runtime
+    restart: "no"
+    environment:
+      <<: *settings
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set the migration-owner PostgreSQL URL}
+    command: ["/app/.venv/bin/alembic", "upgrade", "head"]
+  api:
+    <<: *runtime
+    cpus: 1
+    mem_limit: 512m
+    environment:
+      <<: *settings
+      API_KEY: ${API_KEY:?Set a random application API key}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    ports: ["127.0.0.1:${API_PORT:-18000}:8000"]
+    volumes: ["${ARTIFACT_STORAGE_HOST_PATH:?Set the persistent artifact directory}:/var/lib/runweave/artifacts"]
+    command: ["/app/.venv/bin/uvicorn", "agent_runtime.api:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import os,urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8000/v1/capabilities',headers={'Authorization':'Bearer '+os.environ['API_KEY']}),timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    stop_grace_period: 30s
+  worker:
+    <<: *runtime
+    env_file: ${WORKER_ENV_FILE:?Set the private worker credential file}
+    environment: *settings
+    volumes: ["${ARTIFACT_STORAGE_HOST_PATH:?Set the same persistent artifact directory}:/var/lib/runweave/artifacts"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    command: ["/app/.venv/bin/python", "-m", "agent_runtime.worker"]
+    stop_grace_period: 60s

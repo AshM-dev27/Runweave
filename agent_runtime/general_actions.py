@@ -139,7 +139,7 @@ class GeneralActions:
                             GeneralOperationRow.run_id.in_([root.run_id, *root.data["children"]])
                         )
                     )
-                    if entry["effect"]["kind"] == "external-write" and any(
+                    if entry["effect"]["kind"] != "read" and any(
                         o.data.get("status") == "outcome_unknown" for o in unknown
                     ):
                         fail("unresolved_external_effect", 409)

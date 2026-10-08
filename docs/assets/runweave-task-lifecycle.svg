@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="970" viewBox="0 0 1600 970" role="img" aria-labelledby="title desc">
+<title id="title">Runweave task lifecycle</title>
+<desc id="desc">Submit and persist the task, decide from current context, enforce grants and budgets, execute through activities, check contracts and receipts, and return an explicit outcome. General tasks may revise within remaining budget. Approval and resource pauses require an explicit caller decision. Computer actions stage authorized inputs, run a fresh Python interpreter and publish durable outputs. Reusable computers keep temporary working files until closure or expiry; uncertain cleanup retains capacity. Completed execution can still require attention.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#607d99"/></marker></defs>
+<rect width="1600" height="970" fill="#f7fafd"/>
+<g font-family="Arial, Helvetica, sans-serif">
+<text x="52" y="73" font-size="40" fill="#142e4c" font-weight="700" text-anchor="start">Runweave task lifecycle</text>
+<text x="52" y="116" font-size="25" fill="#536b83" font-weight="400" text-anchor="start">One task call can coordinate several model decisions and tool actions</text>
+<text x="50" y="175" font-size="19" fill="#007d80" font-weight="700" text-anchor="start">01</text>
+<rect x="40" y="197" width="200" height="185" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="62" y="220" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="80" y="242" font-size="24" fill="#142e4c" font-weight="700" text-anchor="start">Submit</text>
+<text x="62" y="283" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Task and attached files</text>
+<text x="62" y="314" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Agent configuration</text>
+<text x="62" y="345" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Conversation identity</text>
+<path d="M 240 287 H 258" fill="none" stroke="#607d99" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="270" y="175" font-size="19" fill="#007d80" font-weight="700" text-anchor="start">02</text>
+<rect x="260" y="197" width="200" height="185" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="282" y="220" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="300" y="242" font-size="24" fill="#142e4c" font-weight="700" text-anchor="start">Persist</text>
+<text x="282" y="283" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Admit the run</text>
+<text x="282" y="314" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Pin policy and tools</text>
+<text x="282" y="345" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Commit the outbox</text>
+<path d="M 460 287 H 478" fill="none" stroke="#607d99" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="490" y="175" font-size="19" fill="#007d80" font-weight="700" text-anchor="start">03</text>
+<rect x="480" y="197" width="200" height="185" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="502" y="220" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="520" y="242" font-size="24" fill="#142e4c" font-weight="700" text-anchor="start">Decide</text>
+<text x="502" y="283" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Use current context</text>
+<text x="502" y="314" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Plan the next action</text>
+<text x="502" y="345" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Account for receipts</text>
+<path d="M 680 287 H 698" fill="none" stroke="#607d99" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="710" y="175" font-size="19" fill="#007d80" font-weight="700" text-anchor="start">04</text>
+<rect x="700" y="197" width="200" height="185" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="722" y="220" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="740" y="242" font-size="24" fill="#142e4c" font-weight="700" text-anchor="start">Authorize</text>
+<text x="722" y="283" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Check tool / file grants</text>
+<text x="722" y="314" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Enforce budgets</text>
+<text x="722" y="345" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Request approval</text>
+<path d="M 900 287 H 918" fill="none" stroke="#607d99" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="930" y="175" font-size="19" fill="#007d80" font-weight="700" text-anchor="start">05</text>
+<rect x="920" y="197" width="200" height="185" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="942" y="220" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="960" y="242" font-size="24" fill="#142e4c" font-weight="700" text-anchor="start">Execute</text>
+<text x="942" y="283" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Schedule activities</text>
+<text x="942" y="314" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Run model or tool I/O</text>
+<text x="942" y="345" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Record effect identity</text>
+<path d="M 1120 287 H 1138" fill="none" stroke="#607d99" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="1150" y="175" font-size="19" fill="#007d80" font-weight="700" text-anchor="start">06</text>
+<rect x="1140" y="197" width="200" height="185" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="1162" y="220" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="1180" y="242" font-size="24" fill="#142e4c" font-weight="700" text-anchor="start">Check</text>
+<text x="1162" y="283" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Configured contracts</text>
+<text x="1162" y="314" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Current verification</text>
+<text x="1162" y="345" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Tool errors / receipts</text>
+<path d="M 1340 287 H 1358" fill="none" stroke="#607d99" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="1370" y="175" font-size="19" fill="#007d80" font-weight="700" text-anchor="start">07</text>
+<rect x="1360" y="197" width="200" height="185" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="1382" y="220" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="1400" y="242" font-size="24" fill="#142e4c" font-weight="700" text-anchor="start">Outcome</text>
+<text x="1382" y="283" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Answer and files</text>
+<text x="1382" y="314" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Explicit next step</text>
+<text x="1382" y="345" font-size="17" fill="#263e59" font-weight="400" text-anchor="start">Stop when bounded</text>
+<path d="M 1240 382 V 425 H 580 V 382" fill="none" stroke="#607d99" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="760" y="414" font-size="22" fill="#536b83" font-weight="400" text-anchor="start">Revise within remaining budget</text>
+<rect x="40" y="500" width="450" height="290" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="62" y="523" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="80" y="545" font-size="25" fill="#142e4c" font-weight="700" text-anchor="start">Pauses and interruptions</text>
+<text x="62" y="586" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Approval or resource pause:</text>
+<text x="62" y="617" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">the caller decides what happens next.</text>
+<text x="62" y="648" font-size="21" fill="#263e59" font-weight="400" text-anchor="start"></text>
+<text x="62" y="679" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Reconcile uncertain effects before retry.</text>
+<text x="62" y="710" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Cancellation fences further task work.</text>
+<text x="62" y="741" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Recovery keeps durable evidence.</text>
+<rect x="535" y="500" width="490" height="290" rx="16" fill="#eaf7f6" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="557" y="523" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="575" y="545" font-size="25" fill="#142e4c" font-weight="700" text-anchor="start">Inside a computer action</text>
+<text x="557" y="586" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Stage authorized artifact inputs.</text>
+<text x="557" y="617" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Execute in a fresh Python interpreter.</text>
+<text x="557" y="648" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Check and publish declared output files.</text>
+<text x="557" y="679" font-size="21" fill="#263e59" font-weight="400" text-anchor="start"></text>
+<text x="557" y="710" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Published files survive machine closure.</text>
+<text x="557" y="741" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Partial outputs may accompany a failure.</text>
+<rect x="1070" y="500" width="490" height="290" rx="16" fill="#fff" stroke="#c8d7e5" stroke-width="2"/>
+<rect x="1092" y="523" width="5" height="27" rx="2" fill="#007d80"/>
+<text x="1110" y="545" font-size="25" fill="#142e4c" font-weight="700" text-anchor="start">Computer lifetime</text>
+<text x="1092" y="586" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Disposable: close after the operation.</text>
+<text x="1092" y="617" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Reusable: retain working files while warm.</text>
+<text x="1092" y="648" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Close explicitly or expire by idle / hard TTL.</text>
+<text x="1092" y="679" font-size="21" fill="#263e59" font-weight="400" text-anchor="start"></text>
+<text x="1092" y="710" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">Guest files and variables are different:</text>
+<text x="1092" y="741" font-size="21" fill="#263e59" font-weight="400" text-anchor="start">files persist; Python variables do not.</text>
+<text x="52" y="852" font-size="25" fill="#142e4c" font-weight="700" text-anchor="start">Execution status and task outcome are separate: completed work can still require attention.</text>
+<text x="52" y="893" font-size="23" fill="#536b83" font-weight="400" text-anchor="start">A model completion claim cannot override tool errors, denied approval or unresolved effects.</text>
+<text x="52" y="932" font-size="22" fill="#536b83" font-weight="400" text-anchor="start">Unknown computer acquisition or cleanup retains capacity until reconciled or independently attested.</text>
+</g></svg>

@@ -2,12 +2,16 @@
 
 import asyncio
 import copy
+import json
+import math
 import time
 from uuid import uuid4
 
 from .activity_liveness import LEASE_SECONDS, enabled, leased_call
-from .extensions import DeferredToolResult, ToolCall
-from .general_db import GeneralAttemptRow, GeneralOperationRow, GeneralRecordRow
+from .artifact_store import OperationArtifacts
+from .computer_store import OperationComputers
+from .extensions import DeferredToolResult, ToolCall, capacity_handler, deferred_handler
+from .general_db import ExtensionSlotRow, GeneralAttemptRow, GeneralOperationRow, GeneralRecordRow
 from .project_store import fail
 
 TOOL_TIMEOUT_SECONDS = 45
@@ -25,8 +29,9 @@ async def execute_extension(store, run_id, operation_id):
         alias = op.data["decision"]["action"]["capability"]
         entry = gr.data["tools"][alias]
         definition = entry["extension"]
+        capacity = capacity_handler(definition["handler"])
         handler = store.extensions.handler(definition)
-        deferred = definition["handler"] == "browser_use.v4"
+        deferred = deferred_handler(definition)
         if row.status in {"completed", "cancelled", "failed"}:
             fail("run_not_active", 409)
         if not (deferred and op.data.get("deferred")):
@@ -38,7 +43,33 @@ async def execute_extension(store, run_id, operation_id):
         ):
             fail("effect_denied", 403)
         if op.data.get("lease", 0) > time.time():
+            if deferred:
+                # Replacement workers wait durably for the previous holder's lease,
+                # rather than exhausting an activity retry before it expires.
+                return {
+                    "external_pending": True,
+                    "retry_after": max(2, min(30, math.ceil(op.data["lease"] - time.time()))),
+                }
             fail("extension_lease_pending", 409)
+        limits = [
+            entry["max_concurrency"]
+            for entry in [definition, *store.extensions.tools.values()]
+            if capacity_handler(entry["handler"]) == capacity and entry.get("max_concurrency") is not None
+        ]
+        limit = min(limits) if limits else None
+        slot = await db.get(ExtensionSlotRow, operation_id)
+        if limit is not None and slot is None and definition["handler"] != "e2b.session.python.v1":
+            from sqlalchemy import func, select
+
+            used = await db.scalar(
+                select(func.count())
+                .select_from(ExtensionSlotRow)
+                .where(ExtensionSlotRow.handler == capacity, ExtensionSlotRow.active.is_(True))
+            )
+            if used >= limit:
+                # No provider intent exists yet; admission/time checks still run on each poll.
+                return {"external_pending": True, "retry_after": 5}
+            db.add(ExtensionSlotRow(operation_id=operation_id, handler=capacity))
         recovering = bool(op.data.get("started"))
         attempts = op.data.get("external_attempts", 0)
         polling = deferred and op.data.get("deferred", False)
@@ -70,14 +101,16 @@ async def execute_extension(store, run_id, operation_id):
             definition,
             copy.deepcopy(op.data.get("handler_state", {})),
             max(0, store.general_time_remaining(root.data)),
-            state_writer(store, run_id, operation_id, owner) if deferred else None,
+            state_writer(store, run_id, operation_id, owner, definition, fence=fence) if deferred else None,
+            OperationArtifacts(store, run_id, operation_id, owner, fence),
+            OperationComputers(store, run_id, operation_id, owner, fence),
         )
     result, unknown = None, False
     try:
         async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
 
             async def perform():
-                if recovering and definition["effect"]["kind"] == "external-write":
+                if recovering and definition["effect"]["retry_safety"] == "reconcile":
                     return await handler.reconcile(call)
                 return await handler.execute(call)
 
@@ -94,12 +127,12 @@ async def execute_extension(store, run_id, operation_id):
                 unknown = True
             else:
                 result = store.extensions.result(definition, value)
-                if deferred and value.get("error"):
+                if (deferred or definition["handler"] == "artifacts.read.v1") and value.get("error"):
                     result["error"] = value["error"]
     except Exception:
         # A timeout/invalid response can happen after a remote write commits.
         # Do not leak exception bodies or turn an ambiguous effect into success.
-        unknown = definition["effect"]["kind"] == "external-write"
+        unknown = definition["effect"]["kind"] != "read"
         if not unknown:
             result = {"error": "extension_execution_failed"}
     async with store.database.sessions.begin() as db:
@@ -122,12 +155,13 @@ async def execute_extension(store, run_id, operation_id):
             result = {
                 "error": "extension_outcome_unknown",
                 "operation_id": operation_id,
-                "feedback": "Do not repeat this write. Its durable operation needs reconciliation.",
+                "feedback": "Do not repeat this operation. Its durable identity needs reconciliation.",
             }
         else:
-            if definition["effect"]["kind"] == "external-write":
+            if definition["effect"]["kind"] != "read":
                 result = {**result, "effect": True, "operation_id": operation_id}
             op.data = {**op.data, "status": "complete", "result": result, "lease": 0}
+            await release_slot(db, operation_id)
         # An already committed external effect is retained even when cancellation wins.
         # Cancellation forbids subsequent actions; it cannot undo a remote commit.
         if unknown and attempts == 0 and not cancelled:
@@ -146,16 +180,70 @@ async def execute_extension(store, run_id, operation_id):
         return result
 
 
-def state_writer(store, run_id, operation_id, owner):
+def state_writer(store, run_id, operation_id, owner, definition, *, fence=None):
     async def save(state):
+        state = store.extensions.redact(definition, state)
+        if len(json.dumps(state, ensure_ascii=False).encode()) > 65536:
+            fail("extension_state_limit", 413)
         async with store.database.sessions.begin() as db:
-            await store.general_lock(db, run_id, active=False)
+            row, _, root = await store.general_lock(db, run_id, active=False)
             op = await db.get(GeneralOperationRow, operation_id)
             if op.data.get("owner") != owner:
                 fail("extension_lease_fenced", 409)
+            if fence is not None and (
+                root.data["fence"] != fence or row.status in {"completed", "cancelled", "failed"}
+            ):
+                fail("extension_lease_fenced", 409)
+            if (
+                definition["handler"] == "e2b.session.python.v1"
+                and op.data.get("handler_state", {}).get("phase") == "finished"
+            ):
+                # Session release commits the finished receipt atomically. A stale
+                # transient-error handler must never regress it after response loss.
+                return
+            if definition["handler"] == "e2b.session.python.v1" and state.get("phase") == "executing":
+                from .computer_db import ComputerSessionRow
+                from .computer_store import epoch
+
+                computer = await db.get(ComputerSessionRow, state["computer_id"])
+                if (
+                    computer is None
+                    or computer.status != "busy"
+                    or computer.data.get("holder") != operation_id
+                    or epoch(computer.expires_at) <= time.time()
+                ):
+                    fail("computer_session_unavailable", 409)
             op.data = {**op.data, "handler_state": copy.deepcopy(state)}
 
     return save
+
+
+async def release_slot(db, operation_id):
+    from sqlalchemy import select
+
+    from .computer_db import ComputerSessionRow
+
+    retained = await db.scalar(
+        select(ComputerSessionRow.id).where(
+            ComputerSessionRow.capacity_operation_id == operation_id, ComputerSessionRow.status != "closed"
+        )
+    )
+    if retained:
+        return
+    slot = await db.get(ExtensionSlotRow, operation_id)
+    if slot is not None:
+        slot.active = False
+
+
+async def settle_tool_attempts(db, op, result):
+    for ordinal in range(1, op.data.get("external_attempts", 0) + 1):
+        attempt = await db.get(GeneralAttemptRow, f"{op.id}:tool:{ordinal}")
+        if attempt:
+            attempt.data = {
+                **attempt.data,
+                "settled": True,
+                "outcome": "failed" if result.get("error") else "complete",
+            }
 
 
 async def cleanup_extension(store, run_id, operation_id, *, provider_io=False):
@@ -169,7 +257,7 @@ async def cleanup_extension(store, run_id, operation_id, *, provider_io=False):
             return False
         alias = op.data["decision"]["action"]["capability"]
         definition = gr.data["tools"][alias]["extension"]
-        if definition["handler"] == "browser_use.v4" and op.data.get("started"):
+        if deferred_handler(definition) and op.data.get("started"):
             if not provider_io:
                 return False
             owner = uuid4().hex
@@ -180,7 +268,8 @@ async def cleanup_extension(store, run_id, operation_id, *, provider_io=False):
                 op.data["decision"]["action"]["arguments"],
                 definition,
                 state=copy.deepcopy(op.data.get("handler_state", {})),
-                save_state=state_writer(store, run_id, operation_id, owner),
+                save_state=state_writer(store, run_id, operation_id, owner, definition),
+                computers=OperationComputers(store, run_id, operation_id, owner, cleanup=True),
             )
         else:
             call = None
@@ -205,14 +294,8 @@ async def cleanup_extension(store, run_id, operation_id, *, provider_io=False):
         if result is None:
             return False
         op.data = {**op.data, "result": {**result, "effect": True, "operation_id": operation_id}}
-        for ordinal in range(1, op.data.get("external_attempts", 0) + 1):
-            attempt = await db.get(GeneralAttemptRow, f"{operation_id}:tool:{ordinal}")
-            if attempt:
-                attempt.data = {
-                    **attempt.data,
-                    "settled": True,
-                    "outcome": "failed" if result.get("error") else "complete",
-                }
+        await release_slot(db, operation_id)
+        await settle_tool_attempts(db, op, result)
         await store.emit(
             db, row, operation_id + ":cleanup", "tool.interrupted", {"operation_id": operation_id}
         )

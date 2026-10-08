@@ -3,7 +3,7 @@ import asyncio
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from agent_runtime import general_db  # noqa: F401
+from agent_runtime import computer_db, general_db  # noqa: F401
 from agent_runtime.config import settings
 from agent_runtime.db import Base
 

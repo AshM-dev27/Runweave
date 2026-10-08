@@ -10,7 +10,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from .db import OutboxRow, RunRow
-from .extensions import ToolCall
+from .extensions import DeferredToolResult, ToolCall, deferred_handler
 from .general_db import GeneralAttemptRow, GeneralOperationRow
 from .project_store import digest, fail
 
@@ -48,7 +48,10 @@ def eligible(op, attempt, request):
     elif not (
         op.data.get("external")
         and op.data.get("started")
-        and op.data.get("effect_policy", {}).get("kind") == "external-write"
+        and (
+            request["kind"] in {"tool_cleanup", "tool_cleanup_attestation"}
+            or op.data.get("effect_policy", {}).get("kind") == "external-write"
+        )
         and op.data.get("status") == "outcome_unknown"
         and op.data.get("result") is None
     ):
@@ -58,7 +61,7 @@ def eligible(op, attempt, request):
 class ReconciliationStore:
     async def recovery(self, run_id, cursor=0, limit=100):
         async with self.database.sessions.begin() as db:
-            row, _, root = await self.general_lock(db, run_id, active=False)
+            row, gr, root = await self.general_lock(db, run_id, active=False)
             root_row = await db.get(RunRow, root.run_id)
             operations = list(
                 await db.scalars(
@@ -81,7 +84,16 @@ class ReconciliationStore:
                 if not a.data.get("settled") and a.data.get("outcome") == "dispatch_unknown"
             ]
             unresolved += [
-                {"target_id": o.id, "kind": "external_write"}
+                {
+                    "target_id": o.id,
+                    "kind": "tool_cleanup"
+                    if deferred_handler(
+                        gr.data["tools"]
+                        .get(o.data.get("decision", {}).get("action", {}).get("capability"), {})
+                        .get("extension", {})
+                    )
+                    else "external_write",
+                }
                 for o in operations
                 if o.data.get("external") and o.data.get("status") == "outcome_unknown"
             ]
@@ -120,6 +132,11 @@ class ReconciliationStore:
                 definition = gr.data["tools"][alias]["extension"]
                 if definition.get("reconciliation") != "lookup":
                     fail("terminal_recovery_requires_lookup_handler", 409)
+            elif body["kind"] in {"tool_cleanup", "tool_cleanup_attestation"}:
+                alias = op.data["decision"]["action"]["capability"]
+                definition = gr.data["tools"][alias]["extension"]
+                if not deferred_handler(definition):
+                    fail("terminal_cleanup_requires_deferred_handler", 409)
             holder = attempt if attempt is not None else op
             prior_id = holder.data.get("reconciliation_id")
             prior = await db.get(GeneralOperationRow, prior_id) if prior_id else None
@@ -201,17 +218,87 @@ async def reconcile_operation(data: dict):
         if op.data.get("result") is not None:
             await finish(store, db, row, recovery, {"outcome": "resolved", "source": "existing_receipt"})
             return receipt(recovery)
+        if request["kind"] == "tool_cleanup_attestation":
+            from .computer_db import ComputerSessionRow
+            from .extension_runtime import release_slot, settle_tool_attempts
+
+            computer = await db.scalar(
+                select(ComputerSessionRow).where(ComputerSessionRow.capacity_operation_id == op.id)
+            )
+            if computer and computer.status != "closed":
+                if computer.data.get("holder") not in {None, op.id}:
+                    fail("computer_busy", 409)
+                computer.status = "closed"
+                computer.data = {
+                    **computer.data,
+                    "holder": None,
+                    "cleanup_attestation": {
+                        "evidence_ref": request["evidence_ref"],
+                        "recovery_id": recovery.id,
+                    },
+                    "provider_cleanup_confirmed": False,
+                }
+
+            op.data = {
+                **op.data,
+                "status": "complete",
+                "lease": 0,
+                "result": {
+                    "error": "operator_cleanup_attested",
+                    "effect": True,
+                    "operation_id": op.id,
+                    "output": {
+                        "cleanup_attested": True,
+                        "provider_cleanup_confirmed": False,
+                        "evidence_ref": request["evidence_ref"],
+                    },
+                },
+            }
+            await release_slot(db, op.id)
+            await settle_tool_attempts(db, op, op.data["result"])
+            await store.emit(
+                db,
+                row,
+                recovery.id + ":effect",
+                "tool.reconciled",
+                {"operation_id": op.id, "source": "operator_cleanup_attestation"},
+            )
+            await finish(
+                store, db, row, recovery, {"outcome": "resolved", "source": "operator_cleanup_attestation"}
+            )
+            return receipt(recovery)
         recovery.data = {**recovery.data, "status": "pending", "lease": time.time() + 60, "owner": owner}
         alias = op.data["decision"]["action"]["capability"]
         definition = gr.data["tools"][alias]["extension"]
-        call = ToolCall(row.id, op.id, copy.deepcopy(op.data["decision"]["action"]["arguments"]), definition)
+        if request["kind"] == "tool_cleanup":
+            from .computer_store import OperationComputers
+            from .extension_runtime import state_writer
+
+            op.data = {**op.data, "owner": owner, "lease": time.time() + 60}
+            call = ToolCall(
+                row.id,
+                op.id,
+                copy.deepcopy(op.data["decision"]["action"]["arguments"]),
+                definition,
+                state=copy.deepcopy(op.data.get("handler_state", {})),
+                save_state=state_writer(store, row.id, op.id, owner, definition),
+                computers=OperationComputers(store, row.id, op.id, owner, cleanup=True),
+            )
+        else:
+            call = ToolCall(
+                row.id, op.id, copy.deepcopy(op.data["decision"]["action"]["arguments"]), definition
+            )
     result = None
     try:
         async with asyncio.timeout(45):
             handler = store.extensions.handler(definition)
-            value = await handler.reconcile(call)
-            if value is not None:
+            value = await (
+                handler.cleanup(call) if request["kind"] == "tool_cleanup" else handler.reconcile(call)
+            )
+            if value is not None and not isinstance(value, DeferredToolResult):
                 result = store.extensions.result(definition, value)
+                if value.get("error"):
+                    result["error"] = value["error"]
     except Exception:
         pass  # Exception bodies can contain credentials; ambiguity remains explicit.
     async with store.database.sessions.begin() as db:
@@ -220,13 +307,21 @@ async def reconcile_operation(data: dict):
         if recovery.data.get("owner") != owner:
             raise ApplicationError("reconciliation_fenced", non_retryable=True)
         op, _ = await target(db, row.id, request)
+        if request["kind"] == "tool_cleanup":
+            if op.data.get("owner") != owner:
+                raise ApplicationError("reconciliation_fenced", non_retryable=True)
+            op.data = {**op.data, "lease": 0}
         if result is not None:
+            from .extension_runtime import release_slot, settle_tool_attempts
+
             op.data = {
                 **op.data,
                 "status": "complete",
                 "lease": 0,
                 "result": {**result, "effect": True, "operation_id": op.id},
             }
+            await release_slot(db, op.id)
+            await settle_tool_attempts(db, op, result)
             await store.emit(db, row, recovery.id + ":effect", "tool.reconciled", {"operation_id": op.id})
         await finish(
             store,
