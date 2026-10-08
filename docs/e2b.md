@@ -91,6 +91,8 @@ Before creation, the operation persists an acquisition intent and opaque operati
 
 Before Python dispatch, the adapter persists the executing phase. A lost response causes a check for the guest receipt; the program is not launched again. If no receipt appears before the deadline, the sandbox is terminated and the job reports a timeout. Interrupted uploads may overwrite the same input bytes before execution starts.
 
+A replacement worker waits durably while the previous worker's operation lease remains valid. Waiting performs no provider I/O and consumes no additional tool attempt; recovery continues under the original operation identity after the lease expires.
+
 The normal result is settled after sandbox termination is confirmed. Cancellation uses the deferred cleanup path to terminate an already-acquired sandbox, without executing new code. Failed termination remains pending for cleanup retries. Unknown acquisition cannot be cleared merely because a metadata query returned no results. Provider lifetime limits provide a backstop, not proof of immediate cleanup.
 
 ## Validation

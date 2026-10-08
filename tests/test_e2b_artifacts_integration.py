@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 
 import pytest
 from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
@@ -14,6 +15,7 @@ from agent_runtime.blob_storage import FileBlobStorage
 from agent_runtime.e2b import ROOT
 from agent_runtime.extensions import ExtensionRegistry
 from agent_runtime.general_contracts import GeneralPolicy
+from agent_runtime.general_db import GeneralOperationRow
 from agent_runtime.general_workflow import GeneralWorkflow
 from agent_runtime.schemas import AgentConfig
 
@@ -47,11 +49,16 @@ async def test_files_return_in_result_survive_worker_replacement_and_replay(
             while file_cloud.count("run") == 0:
                 await asyncio.sleep(0.1)
     file_cloud.content[ROOT + "/result.json"] = b'{"exit_code":0,"stdout":"generated","stderr":""}'
+    # A crashed worker can leave a live lease beyond Temporal's short retry window.
+    # Force that window rather than relying on the timing of worker shutdown.
+    async with pg_store.database.sessions.begin() as db:
+        op = await db.get(GeneralOperationRow, run.id + ":action:0")
+        op.data = {**op.data, "lease": time.time() + 12}
     # Reopen the same blob directory as a replacement process would.
     pg_store.blobs = FileBlobStorage(tmp_path / "blobs")
     async with backend(pg_store, monkeypatch) as (client, temporal):
         result = await client.result(run.id, timeout=45)
-        assert result.outcome == "succeeded" and len(result.files) == 2
+        assert result.outcome == "succeeded" and len(result.files) == 2, result.model_dump()
         image = next(file for file in result.files if file.filename == "report.png")
         destination = tmp_path / "download.png"
         await client.download_file(image.id, destination)

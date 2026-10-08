@@ -2,6 +2,7 @@
 
 import copy
 import json
+import time
 
 import pytest
 from sqlalchemy import select
@@ -168,6 +169,43 @@ async def test_replacement_store_resumes_collection_and_keeps_published_files(st
             assert file_cloud.count("run") == file_cloud.count("create") == 1
         finally:
             configure_store(store)
+
+
+@pytest.mark.parametrize("alias", ["e2b_python", "e2b_files"])
+async def test_replacement_waits_for_live_lease_then_collects_without_redispatch(store, file_cloud, alias):
+    from examples.e2b_invoice import job as text_job
+
+    store.extensions = ExtensionRegistry({"tools": [legacy_registration(), registration()]})
+    file_cloud.missing_receipt = True
+    async with http_client(store) as client:
+        agent = await client.create_agent(
+            AgentConfig(
+                name="lease-recovery", provider="fake", model="deterministic", tools=[alias], general={}
+            )
+        )
+        run = await client.submit(agent.id, "Recover the original command")
+        payload = action(run.id, alias, text_job() if alias == "e2b_python" else job())
+        for _ in range(3):
+            assert (await general_action(payload))["external_pending"]
+        assert file_cloud.count("run") == 1
+        async with store.database.sessions.begin() as db:
+            op = await db.get(GeneralOperationRow, run.id + ":action:0")
+            op.data = {**op.data, "lease": time.time() + 60}
+            before = copy.deepcopy(op.data)
+        calls = list(file_cloud.calls)
+        for _ in range(3):
+            waiting = await general_action(payload)
+            assert waiting["external_pending"] and 2 <= waiting["retry_after"] <= 30
+        assert file_cloud.calls == calls
+        async with store.database.sessions.begin() as db:
+            op = await db.get(GeneralOperationRow, run.id + ":action:0")
+            assert op.data == before
+            op.data = {**op.data, "lease": time.time() - 1}
+        file_cloud.content[ROOT + "/result.json"] = b'{"exit_code":0,"stdout":"generated","stderr":""}'
+        result = await finish(payload)
+        assert result["output"]["cleanup_complete"] and len(result["output"]["outputs"]) == 2
+        assert file_cloud.count("create") == file_cloud.count("run") == file_cloud.count("kill") == 1
+        assert (await client.budget(run.id))["v3"]["counters"]["tool_attempts"] == 1
 
 
 async def test_cancelled_operation_cannot_publish_a_new_file(store, file_cloud, tmp_path):

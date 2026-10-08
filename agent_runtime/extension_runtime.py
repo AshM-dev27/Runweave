@@ -43,7 +43,7 @@ async def execute_extension(store, run_id, operation_id):
         ):
             fail("effect_denied", 403)
         if op.data.get("lease", 0) > time.time():
-            if definition["handler"] == "e2b.session.python.v1":
+            if deferred:
                 # Replacement workers wait durably for the previous holder's lease,
                 # rather than exhausting an activity retry before it expires.
                 return {
